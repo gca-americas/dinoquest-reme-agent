@@ -16,13 +16,31 @@ An ADK agent that listens for Cloud Run error logs, diagnoses the root cause, an
 ├── main.py              # Service entrypoint — receives Eventarc HTTP POST, runs agent
 ├── runner.py            # ADK Runner + session service
 ├── agent.py             # LlmAgent definition, loads skill from file
-├── tools.py             # Cloud Run v2 API tools
+├── tools.py             # Cloud Run v2 API tools (list/get/rollback/update)
 ├── skills/
 │   └── remediation/
-│       └── SKILL.md     # Agent playbook — edit this to change behavior
+│       ├── SKILL.md     # Agent playbook — edit this to change behavior
+│       └── scripts/     # Shell scripts for the code-fix track
+│           ├── clone_repo.sh
+│           ├── read_file.sh
+│           ├── apply_fix.sh
+│           ├── commit_branch.sh
+│           ├── open_pr.sh
+│           └── rollback_fix.sh
 ├── requirements.txt
 └── Dockerfile
 ```
+
+### Remediation tracks
+
+| Track | Trigger | Tools used |
+|---|---|---|
+| **Infra fix** | OOM, CPU throttle, bad deploy, missing env var | `_get_service`, `_update_service_resources`, `_rollback_traffic`, `_update_service_env_vars` |
+| **OOM root-cause** | Always runs after an OOM infra fix | `_clone_repo` → `_read_repo_file` → `_apply_code_fix` → `_commit_to_incident_branch` → `_open_pull_request` |
+| **Code fix** | Application bug in source (stack trace, import error, logic bug) | same as above |
+| **Rollback** | Undo a code fix PR (demo / wrong fix) | `_rollback_fix` |
+
+The code-fix and OOM root-cause tracks create a branch named `incident_YYMMDDHH` (from the error log timestamp), commit the fix, push, and open a PR. To roll back, the agent calls `_rollback_fix` with the branch name — closes the PR and deletes the branch.
 
 ---
 
@@ -69,6 +87,63 @@ An ADK agent that listens for Cloud Run error logs, diagnoses the root cause, an
 | `GOOGLE_CLOUD_PROJECT` | Yes | — | GCP project ID |
 | `CLOUD_RUN_REGION` | No | `us-central1` | Region where your services live |
 | `GOOGLE_GENAI_USE_VERTEXAI` | Yes | — | Set to `True` to route LLM calls through Vertex AI |
+| `GITHUB_REPO_URL` | For code-fix track | — | HTTPS URL of the repo to clone, e.g. `https://github.com/org/repo` |
+| `GITHUB_TOKEN` | For code-fix track | — | GitHub PAT — set directly for local dev; in production use Secret Manager (see below) |
+| `GITHUB_TOKEN_SECRET` | For code-fix track | — | Secret Manager resource name — used instead of `GITHUB_TOKEN` in production |
+| `GIT_AUTHOR_NAME` | No | `DinoAgent` | Git commit author name |
+| `GIT_AUTHOR_EMAIL` | No | `dinoagent@noreply.github.com` | Git commit author email |
+
+---
+
+## GitHub token setup (code-fix track)
+
+The code-fix and OOM root-cause tracks need a GitHub Personal Access Token (PAT) with `repo` scope.
+
+### Local dev
+
+Add to `.env`:
+```
+GITHUB_TOKEN=ghp_xxxx
+GITHUB_REPO_URL=https://github.com/org/repo
+```
+
+### Production — Secret Manager (recommended)
+
+**One-time secret creation:**
+```bash
+echo -n "ghp_xxxx" | gcloud secrets create github-token --data-file=-
+```
+
+**Grant the Cloud Run service account access:**
+```bash
+PROJECT_ID=$(gcloud config get-value project)
+SA="remediation-agent@${PROJECT_ID}.iam.gserviceaccount.com"
+
+gcloud secrets add-iam-policy-binding github-token \
+  --member="serviceAccount:${SA}" \
+  --role="roles/secretmanager.secretAccessor"
+```
+
+**Deploy with the secret mounted as an env var** (recommended — token injected before process starts):
+```bash
+gcloud run deploy remediation-agent \
+  --set-secrets GITHUB_TOKEN=github-token:latest \
+  --set-env-vars GITHUB_REPO_URL=https://github.com/org/repo \
+  ...
+```
+
+**Alternative — fetch from Secret Manager at startup** (agent resolves it via `GITHUB_TOKEN_SECRET`):
+```bash
+gcloud run deploy remediation-agent \
+  --set-env-vars GITHUB_TOKEN_SECRET=projects/${PROJECT_ID}/secrets/github-token/versions/latest \
+  --set-env-vars GITHUB_REPO_URL=https://github.com/org/repo \
+  ...
+```
+
+Don't forget to enable the Secret Manager API:
+```bash
+gcloud services enable secretmanager.googleapis.com
+```
 
 ---
 
@@ -79,24 +154,55 @@ An ADK agent that listens for Cloud Run error logs, diagnoses the root cause, an
    pip install -r requirements.txt
    ```
 
-2. **Authenticate with GCP**
+2. **Install `git` and `gh`** (required for the code-fix track)
+   ```bash
+   # macOS
+   brew install git gh
+
+   # Debian/Ubuntu
+   sudo apt-get install git gh
+   ```
+
+3. **Authenticate with GCP**
    ```bash
    gcloud auth application-default login
    ```
 
-3. **Copy and fill in env vars**
+4. **Copy and fill in env vars**
    ```bash
    cp .env.example .env
-   # edit .env with your project ID
+   # edit .env — set GOOGLE_CLOUD_PROJECT, and GITHUB_REPO_URL + GITHUB_TOKEN for code-fix track
    ```
 
-4. **Run with a test error message**
+5. **Run with a test error message**
+
+   Set `ERROR_MESSAGE` in `.env` to one of the examples below, then:
    ```bash
-   ERROR_MESSAGE="Service dinoquest2 is failing: container exited with code 1 after recent deploy" \
    python main.py
    ```
-
    `ERROR_MESSAGE` bypasses the HTTP server for local testing. In production the message arrives from Eventarc as an HTTP POST.
+
+### Test messages by track
+
+**Infra track — OOM** (also triggers OOM root-cause track if `GITHUB_REPO_URL` is set)
+```
+{"severity":"ERROR","resource":{"type":"cloud_run_revision","labels":{"service_name":"dinoquest2","revision_name":"dinoquest2-00001-abc"}},"textPayload":"Memory limit of 128 MiB exceeded with 128 MiB used. Consider increasing the memory limit, see https://cloud.google.com/run/docs/configuring/memory-limits","timestamp":"2026-04-17T18:26:06Z"}
+```
+
+**Infra track — bad deploy / rollback**
+```
+{"severity":"ERROR","resource":{"type":"cloud_run_revision","labels":{"service_name":"dinoquest2"}},"textPayload":"Revision dinoquest2-00042-abc failed health check: container failed to start.","timestamp":"2026-04-17T18:26:06Z"}
+```
+
+**Code-fix track — application bug** (requires `GITHUB_REPO_URL` and `GITHUB_TOKEN`)
+```
+{"severity":"ERROR","resource":{"type":"cloud_run_revision","labels":{"service_name":"dinoquest2"}},"textPayload":"Traceback (most recent call last):\n  File \"/app/main.py\", line 42, in handle_request\n    result = process_data(payload)\n  File \"/app/processor.py\", line 17, in process_data\n    return data[\"items\"][0]\nKeyError: \"items\"","timestamp":"2026-04-17T18:26:06Z"}
+```
+
+**To test rollback** — after a code-fix run, pass the branch name back:
+```
+Roll back the fix on branch incident_2604201826 for service dinoquest2
+```
 
 ---
 
@@ -121,6 +227,8 @@ gcloud run deploy remediation-agent \
   --region=us-central1 \
   --service-account=$SA \
   --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_GENAI_USE_VERTEXAI=True" \
+  --set-env-vars="GITHUB_REPO_URL=https://github.com/org/repo" \
+  --set-secrets="GITHUB_TOKEN=github-token:latest" \
   --no-allow-unauthenticated \
   --timeout=300
 ```
