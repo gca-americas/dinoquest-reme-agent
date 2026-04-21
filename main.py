@@ -82,11 +82,15 @@ def _notify_slack(summary: str) -> None:
     if not _SLACK_WEBHOOK_URL:
         return
     try:
-        requests.post(
+        resp = requests.post(
             _SLACK_WEBHOOK_URL,
             json={"text": f"*DinoAgent Remediation*\n```{summary}```"},
             timeout=10,
         )
+        if resp.status_code != 200:
+            log.warning("Slack notification failed: HTTP %s — %s", resp.status_code, resp.text)
+        else:
+            log.info("Slack notification sent")
     except Exception as e:
         log.warning("Slack notification failed: %s", e)
 
