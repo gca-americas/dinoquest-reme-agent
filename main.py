@@ -27,11 +27,12 @@ import os
 import threading
 from datetime import datetime, timedelta, timezone
 
+import requests
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from flask import Flask, request
+from flask import Flask, request as flask_request
 from google.genai import types
 
 from runner import APP_NAME, build_runner
@@ -44,11 +45,50 @@ app = Flask(__name__)
 _USER_ID = "eventarc-trigger"
 
 # In-memory dedup: fingerprint -> last handled datetime
-# Keyed by a hash of (service_name, error_text) so semantically identical
-# errors from the same burst are only processed once per DEDUP_WINDOW.
 _dedup_cache: dict[str, datetime] = {}
 _dedup_lock = threading.Lock()
 _DEDUP_WINDOW = timedelta(minutes=5)
+
+_GCHAT_WEBHOOK_URL: str = ""
+
+
+def _resolve_gchat_webhook() -> None:
+    """Ensure _GCHAT_WEBHOOK_URL is set.
+
+    Resolution order:
+    1. GOOGLE_CHAT_WEBHOOK_URL env var (local dev or Cloud Run --set-secrets mount).
+    2. Fetch from Secret Manager using the resource name in GOOGLE_CHAT_WEBHOOK_SECRET
+       (e.g. 'projects/my-project/secrets/gchat-webhook/versions/latest').
+    """
+    global _GCHAT_WEBHOOK_URL
+    url = os.environ.get("GOOGLE_CHAT_WEBHOOK_URL", "")
+    if url:
+        _GCHAT_WEBHOOK_URL = url
+        return
+
+    secret_name = os.environ.get("GOOGLE_CHAT_WEBHOOK_SECRET", "")
+    if not secret_name:
+        log.warning("GOOGLE_CHAT_WEBHOOK_URL and GOOGLE_CHAT_WEBHOOK_SECRET are both unset — Chat notifications disabled")
+        return
+
+    from google.cloud import secretmanager
+    client = secretmanager.SecretManagerServiceClient()
+    response = client.access_secret_version(name=secret_name)
+    _GCHAT_WEBHOOK_URL = response.payload.data.decode()
+    log.info("GOOGLE_CHAT_WEBHOOK_URL loaded from Secret Manager")
+
+
+def _notify_gchat(summary: str) -> None:
+    if not _GCHAT_WEBHOOK_URL:
+        return
+    try:
+        requests.post(
+            _GCHAT_WEBHOOK_URL,
+            json={"text": f"*DinoAgent Remediation*\n```{summary}```"},
+            timeout=10,
+        )
+    except Exception as e:
+        log.warning("Google Chat notification failed: %s", e)
 
 
 def _fingerprint(error_message: str) -> str:
@@ -57,7 +97,6 @@ def _fingerprint(error_message: str) -> str:
         entry = json.loads(error_message)
         service = entry.get("resource", {}).get("labels", {}).get("service_name", "")
         text = entry.get("textPayload") or json.dumps(entry.get("jsonPayload", ""))
-        # Truncate to first 200 chars to focus on the error type, not variable details
         key = f"{service}:{text[:200]}"
     except (json.JSONDecodeError, AttributeError):
         key = error_message[:200]
@@ -100,11 +139,12 @@ async def _run(error_message: str, session_id: str) -> None:
         if event.is_final_response() and event.content and event.content.parts:
             final_response = event.content.parts[0].text
     log.info("Remediation complete:\n%s", final_response)
+    _notify_gchat(final_response)
 
 
 @app.route("/", methods=["POST"])
 def handle_event():
-    envelope = request.get_json(silent=True)
+    envelope = flask_request.get_json(silent=True)
     if not envelope or "message" not in envelope:
         log.error("Invalid envelope: %s", envelope)
         return "Bad Request: missing or invalid message", 400
@@ -131,6 +171,8 @@ def handle_event():
 
     return ("", 204)
 
+
+_resolve_gchat_webhook()
 
 if __name__ == "__main__":
     direct = os.environ.get("ERROR_MESSAGE")
