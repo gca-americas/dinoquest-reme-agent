@@ -82,9 +82,10 @@ def _notify_slack(summary: str) -> None:
     if not _SLACK_WEBHOOK_URL:
         return
     try:
+        text = f"*DinoAgent Remediation*\n```{summary[:3000]}```"
         resp = requests.post(
             _SLACK_WEBHOOK_URL,
-            json={"text": f"*DinoAgent Remediation*\n```{summary}```"},
+            json={"text": text},
             timeout=10,
         )
         if resp.status_code != 200:
