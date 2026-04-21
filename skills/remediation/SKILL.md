@@ -20,13 +20,30 @@ your job is to diagnose the root cause and take the safest corrective action ava
 
 | Symptom | Action |
 |---|---|
-| OOM / memory limit exceeded / killed | **Both steps required:** (1) increase memory with `_update_service_resources` — double the current limit; (2) follow the OOM Root-Cause track below to investigate and PR a code-level fix |
+| OOM / memory limit exceeded / killed | **Both steps required:** (1) increase memory with `_update_service_resources` — go up exactly one tier from the reported limit (see Memory Tiers below); (2) follow the OOM Root-Cause track below to investigate and PR a code-level fix |
 | Service unhealthy after recent deploy | Rollback traffic to the previous ready revision with `rollback_traffic` |
 | Missing or incorrect env var causing crashes | Update the env var with `update_service_env_vars` |
 | CPU throttling / timeout under load | Increase CPU with `update_service_resources` |
 | Unknown service | Call `list_services` first to confirm the service name |
 | Multiple services affected | Handle each one sequentially |
 | Application code bug causing crashes / errors | Follow the **Code Fix track** below |
+
+### Memory Tiers
+
+Always use these fixed tiers — never double the current service memory:
+
+| Reported limit in error | Set memory to |
+|---|---|
+| 128Mi | 256Mi |
+| 256Mi | 512Mi |
+| 512Mi | 1Gi |
+| 1Gi | 2Gi |
+| 2Gi | 4Gi |
+| 4Gi | increase CPU to 2 first, then set memory to 4Gi |
+
+**The tier is determined by what the error log says was exceeded, not by the current service config.**
+If the error does not state a specific limit, read it from `_get_service` and apply the tier above.
+Never set memory above 4Gi on a 1-CPU service — Cloud Run will reject it.
 
 ### Identifying memory issues
 Look for any of these signals in the error message or service conditions:
@@ -36,8 +53,10 @@ Look for any of these signals in the error message or service conditions:
 
 ### Idempotency — always check current state first
 Before taking any action, call `_get_service` to read the **current** memory limit.
-- If the current limit is **already higher** than what the error reports, the issue has already been addressed. **Do not act — report this and exit.**
-- Only increase memory if the current limit matches or is lower than the limit reported in the error.
+- Find the reported limit from the error log (e.g. "128Mi exceeded").
+- Look up the **next tier** from the Memory Tiers table above (e.g. 128Mi → 256Mi).
+- If the current service memory is **already at or above the next tier**, the issue has already been addressed. **Do not act — report this and exit.**
+- Only act if the current memory is below the next tier.
 
 ## OOM Root-Cause Track
 
