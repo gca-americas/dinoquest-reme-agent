@@ -95,37 +95,38 @@ The code-fix track creates a branch named `incident_YYMMDDHH` (from the error lo
 | `GITHUB_TOKEN` | For code-fix track | — | GitHub PAT — injected via Secret Manager in production (see below) |
 | `GIT_AUTHOR_NAME` | No | `DinoAgent` | Git commit author name |
 | `GIT_AUTHOR_EMAIL` | No | `dinoagent@noreply.github.com` | Git commit author email |
-| `GOOGLE_CHAT_WEBHOOK_URL` | For Chat notifications | — | Incoming webhook URL for a Google Chat space |
-| `GOOGLE_CHAT_WEBHOOK_SECRET` | For Chat notifications (prod) | — | Secret Manager resource name, e.g. `projects/my-project/secrets/gchat-webhook/versions/latest` |
+| `SLACK_WEBHOOK_URL` | For Slack notifications | — | Incoming webhook URL for a Slack channel |
+| `SLACK_WEBHOOK_SECRET` | For Slack notifications (prod) | — | Secret Manager resource name, e.g. `projects/my-project/secrets/slack-webhook/versions/latest` |
 
 ---
 
-## Google Chat notifications
+## Slack notifications
 
-When a remediation completes, the agent POSTs a summary to a Google Chat space via an incoming webhook.
+When a remediation completes, the agent POSTs a summary to a Slack channel via an incoming webhook.
 
-### 1. Create a Google Chat incoming webhook
+### 1. Create a Slack incoming webhook
 
-1. Open [Google Chat](https://chat.google.com) and go to the space you want to receive notifications.
-2. Click the space name at the top → **Apps & integrations** → **Add webhooks**.
-3. Give it a name (e.g. `DinoAgent`) and click **Save**.
-4. Copy the webhook URL — it looks like:
+1. Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → **From scratch**.
+2. Pick a name (e.g. `DinoAgent`) and select your workspace → **Create App**.
+3. Under **Add features and functionality**, click **Incoming Webhooks** → toggle **Activate Incoming Webhooks** on.
+4. Click **Add New Webhook to Workspace**, choose the channel, and click **Allow**.
+5. Copy the webhook URL — it looks like:
    ```
-   https://chat.googleapis.com/v1/spaces/XXXXX/messages?key=XXXXX&token=XXXXX
+   https://hooks.slack.com/services/<team_id>/<channel_id>/<token>
    ```
 
 ### 2. Local dev
 
 Add to `.env`:
 ```
-GOOGLE_CHAT_WEBHOOK_URL=https://chat.googleapis.com/v1/spaces/...
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
 ```
 
 ### 3. Production — Secret Manager (recommended)
 
 **One-time secret creation:**
 ```bash
-echo -n "https://chat.googleapis.com/v1/spaces/..." | gcloud secrets create gchat-webhook --data-file=-
+echo -n "https://hooks.slack.com/services/..." | gcloud secrets create slack-webhook --data-file=-
 ```
 
 **Grant the Cloud Run service account access:**
@@ -133,7 +134,7 @@ echo -n "https://chat.googleapis.com/v1/spaces/..." | gcloud secrets create gcha
 PROJECT_ID=$(gcloud config get-value project)
 SA="remediation-agent@${PROJECT_ID}.iam.gserviceaccount.com"
 
-gcloud secrets add-iam-policy-binding gchat-webhook \
+gcloud secrets add-iam-policy-binding slack-webhook \
   --member="serviceAccount:${SA}" \
   --role="roles/secretmanager.secretAccessor"
 ```
@@ -142,10 +143,10 @@ gcloud secrets add-iam-policy-binding gchat-webhook \
 ```bash
 gcloud run services update remediation-agent \
   --region=us-central1 \
-  --set-env-vars="GOOGLE_CHAT_WEBHOOK_SECRET=projects/${PROJECT_ID}/secrets/gchat-webhook/versions/latest"
+  --set-env-vars="SLACK_WEBHOOK_SECRET=projects/${PROJECT_ID}/secrets/slack-webhook/versions/latest"
 ```
 
-Or add `--set-env-vars="GOOGLE_CHAT_WEBHOOK_SECRET=..."` directly to the initial `gcloud run deploy` command.
+Or add `--set-env-vars="SLACK_WEBHOOK_SECRET=..."` directly to the initial `gcloud run deploy` command.
 
 ---
 
@@ -262,13 +263,13 @@ gcloud run deploy remediation-agent \
   --memory=2Gi \
   --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_GENAI_USE_VERTEXAI=True" \
   --set-env-vars="GITHUB_REPO_URL=https://github.com/weimeilin79/DinoQuest" \
-  --set-env-vars="GOOGLE_CHAT_WEBHOOK_SECRET=projects/${PROJECT_ID}/secrets/gchat-webhook/versions/latest" \
+  --set-env-vars="SLACK_WEBHOOK_SECRET=projects/${PROJECT_ID}/secrets/slack-webhook/versions/latest" \
   --set-secrets="GITHUB_TOKEN=github-token:latest" \
   --no-allow-unauthenticated \
   --timeout=300
 ```
 
-> Omit `--set-env-vars="GOOGLE_CHAT_WEBHOOK_SECRET=..."` if you don't need Chat notifications. You can also pass the URL directly with `--set-env-vars="GOOGLE_CHAT_WEBHOOK_URL=https://chat.googleapis.com/..."` for a simpler setup.
+> Omit `--set-env-vars="SLACK_WEBHOOK_SECRET=..."` if you don't need Slack notifications. You can also pass the URL directly with `--set-env-vars="SLACK_WEBHOOK_URL=https://hooks.slack.com/..."` for a simpler setup.
 
 > No API key needed — the service authenticates to Vertex AI via the attached service account's Application Default Credentials.
 

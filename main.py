@@ -49,46 +49,46 @@ _dedup_cache: dict[str, datetime] = {}
 _dedup_lock = threading.Lock()
 _DEDUP_WINDOW = timedelta(minutes=5)
 
-_GCHAT_WEBHOOK_URL: str = ""
+_SLACK_WEBHOOK_URL: str = ""
 
 
-def _resolve_gchat_webhook() -> None:
-    """Ensure _GCHAT_WEBHOOK_URL is set.
+def _resolve_slack_webhook() -> None:
+    """Ensure _SLACK_WEBHOOK_URL is set.
 
     Resolution order:
-    1. GOOGLE_CHAT_WEBHOOK_URL env var (local dev or Cloud Run --set-secrets mount).
-    2. Fetch from Secret Manager using the resource name in GOOGLE_CHAT_WEBHOOK_SECRET
-       (e.g. 'projects/my-project/secrets/gchat-webhook/versions/latest').
+    1. SLACK_WEBHOOK_URL env var (local dev or Cloud Run --set-env-vars).
+    2. Fetch from Secret Manager using the resource name in SLACK_WEBHOOK_SECRET
+       (e.g. 'projects/my-project/secrets/slack-webhook/versions/latest').
     """
-    global _GCHAT_WEBHOOK_URL
-    url = os.environ.get("GOOGLE_CHAT_WEBHOOK_URL", "")
+    global _SLACK_WEBHOOK_URL
+    url = os.environ.get("SLACK_WEBHOOK_URL", "")
     if url:
-        _GCHAT_WEBHOOK_URL = url
+        _SLACK_WEBHOOK_URL = url
         return
 
-    secret_name = os.environ.get("GOOGLE_CHAT_WEBHOOK_SECRET", "")
+    secret_name = os.environ.get("SLACK_WEBHOOK_SECRET", "")
     if not secret_name:
-        log.warning("GOOGLE_CHAT_WEBHOOK_URL and GOOGLE_CHAT_WEBHOOK_SECRET are both unset — Chat notifications disabled")
+        log.warning("SLACK_WEBHOOK_URL and SLACK_WEBHOOK_SECRET are both unset — Slack notifications disabled")
         return
 
     from google.cloud import secretmanager
     client = secretmanager.SecretManagerServiceClient()
     response = client.access_secret_version(name=secret_name)
-    _GCHAT_WEBHOOK_URL = response.payload.data.decode()
-    log.info("GOOGLE_CHAT_WEBHOOK_URL loaded from Secret Manager")
+    _SLACK_WEBHOOK_URL = response.payload.data.decode()
+    log.info("SLACK_WEBHOOK_URL loaded from Secret Manager")
 
 
-def _notify_gchat(summary: str) -> None:
-    if not _GCHAT_WEBHOOK_URL:
+def _notify_slack(summary: str) -> None:
+    if not _SLACK_WEBHOOK_URL:
         return
     try:
         requests.post(
-            _GCHAT_WEBHOOK_URL,
+            _SLACK_WEBHOOK_URL,
             json={"text": f"*DinoAgent Remediation*\n```{summary}```"},
             timeout=10,
         )
     except Exception as e:
-        log.warning("Google Chat notification failed: %s", e)
+        log.warning("Slack notification failed: %s", e)
 
 
 def _fingerprint(error_message: str) -> str:
@@ -139,7 +139,7 @@ async def _run(error_message: str, session_id: str) -> None:
         if event.is_final_response() and event.content and event.content.parts:
             final_response = event.content.parts[0].text
     log.info("Remediation complete:\n%s", final_response)
-    _notify_gchat(final_response)
+    _notify_slack(final_response)
 
 
 @app.route("/", methods=["POST"])
@@ -172,7 +172,7 @@ def handle_event():
     return ("", 204)
 
 
-_resolve_gchat_webhook()
+_resolve_slack_webhook()
 
 if __name__ == "__main__":
     direct = os.environ.get("ERROR_MESSAGE")
