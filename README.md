@@ -5,7 +5,7 @@ An ADK agent that listens for Cloud Run error logs, diagnoses the root cause, an
 ## How it works
 
 1. Cloud Run services emit error logs to Cloud Logging
-2. A Logging sink filters `severity>=ERROR` logs and routes them to a Pub/Sub topic
+2. A Logging sink filters `severity=ERROR` logs and routes them to a Pub/Sub topic
 3. Eventarc delivers the event as an HTTP POST to this Cloud Run Service
 4. The agent reads the error, inspects the affected service, and takes action (rollback, env var fix, etc.)
 5. Results are logged to Cloud Logging
@@ -36,8 +36,9 @@ An ADK agent that listens for Cloud Run error logs, diagnoses the root cause, an
 | Track | Trigger | Tools used |
 |---|---|---|
 | **Infra fix** | OOM, CPU throttle, bad deploy, missing env var | `_get_service`, `_update_service_resources`, `_rollback_traffic`, `_update_service_env_vars` |
-| **Code fix** | Application bug in source (stack trace, import error, logic bug) | `_clone_repo` → `_read_repo_file` → `_apply_code_fix` → `_commit_to_incident_branch` → `_open_pull_request` |
-| **Code fix rollback** | Undo a code fix PR (demo / wrong fix) | `_rollback_fix` |
+| **OOM root-cause** | Always runs after an OOM infra fix | `_clone_repo` → `_read_repo_file` → `_apply_code_fix` → `_commit_to_incident_branch` → `_open_pull_request` |
+| **Code fix** | Application bug in source (stack trace, import error, logic bug) | same as above |
+| **Rollback** | Undo a code fix PR (demo / wrong fix) | `_rollback_fix` |
 
 The code-fix track creates a branch named `incident_YYMMDDHH` (from the error log timestamp), commits the fix, pushes, and opens a PR. To roll back, call `_rollback_fix` with the branch name — it closes the PR and deletes the branch.
 
@@ -49,7 +50,8 @@ The code-fix track creates a branch named `incident_YYMMDDHH` (from the error lo
 
 1. **Enable APIs**
    ```bash
-   gcloud services enable run.googleapis.com eventarc.googleapis.com pubsub.googleapis.com aiplatform.googleapis.com logging.googleapis.com
+   gcloud services enable run.googleapis.com eventarc.googleapis.com pubsub.googleapis.com \
+     aiplatform.googleapis.com logging.googleapis.com secretmanager.googleapis.com
    ```
 
 2. **Create a service account** for the agent
@@ -77,6 +79,9 @@ The code-fix track creates a branch named `incident_YYMMDDHH` (from the error lo
 
    gcloud projects add-iam-policy-binding $PROJECT_ID \
      --member="serviceAccount:${SA}" --role="roles/artifactregistry.reader"
+
+   gcloud projects add-iam-policy-binding $PROJECT_ID \
+     --member="serviceAccount:${SA}" --role="roles/secretmanager.secretAccessor"
    ```
 
 ### Environment variables
@@ -87,8 +92,7 @@ The code-fix track creates a branch named `incident_YYMMDDHH` (from the error lo
 | `CLOUD_RUN_REGION` | No | `us-central1` | Region where your services live |
 | `GOOGLE_GENAI_USE_VERTEXAI` | Yes | — | Set to `True` to route LLM calls through Vertex AI |
 | `GITHUB_REPO_URL` | For code-fix track | — | HTTPS URL of the repo to clone, e.g. `https://github.com/org/repo` |
-| `GITHUB_TOKEN` | For code-fix track | — | GitHub PAT — set directly for local dev; in production use Secret Manager (see below) |
-| `GITHUB_TOKEN_SECRET` | For code-fix track | — | Secret Manager resource name — used instead of `GITHUB_TOKEN` in production |
+| `GITHUB_TOKEN` | For code-fix track | — | GitHub PAT — injected via Secret Manager in production (see below) |
 | `GIT_AUTHOR_NAME` | No | `DinoAgent` | Git commit author name |
 | `GIT_AUTHOR_EMAIL` | No | `dinoagent@noreply.github.com` | Git commit author email |
 
@@ -96,7 +100,7 @@ The code-fix track creates a branch named `incident_YYMMDDHH` (from the error lo
 
 ## GitHub token setup (code-fix track)
 
-The code-fix track needs a GitHub Personal Access Token (PAT) with `repo` scope.
+The code-fix and OOM root-cause tracks need a GitHub Personal Access Token (PAT) with `repo` scope.
 
 ### Local dev
 
@@ -110,7 +114,7 @@ GITHUB_REPO_URL=https://github.com/org/repo
 
 **One-time secret creation:**
 ```bash
-echo -n "ghp_YOUR_GITHUB_TOKEN_HERE" | gcloud secrets create github-token --data-file=-
+echo -n "ghp_xxxx" | gcloud secrets create github-token --data-file=-
 ```
 
 **Grant the Cloud Run service account access:**
@@ -123,23 +127,6 @@ gcloud secrets add-iam-policy-binding github-token \
   --role="roles/secretmanager.secretAccessor"
 ```
 
-**Deploy with the secret name as a plain env var** (agent fetches it at startup):
-```bash
-gcloud run deploy remediation-agent \
-  --image=$IMAGE \
-  --region=us-central1 \
-  --service-account=$SA \
-  --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_GENAI_USE_VERTEXAI=True" \
-  --set-env-vars GITHUB_TOKEN_SECRET=projects/${PROJECT_ID}/secrets/github-token/versions/latest \
-  --set-env-vars GITHUB_REPO_URL=https://github.com/org/repo \
-  --no-allow-unauthenticated \
-  --timeout=300
-```
-
-```bash
-gcloud services enable secretmanager.googleapis.com
-```
-
 ---
 
 ## Running locally
@@ -149,24 +136,55 @@ gcloud services enable secretmanager.googleapis.com
    pip install -r requirements.txt
    ```
 
-2. **Authenticate with GCP**
+2. **Install `git` and `gh`** (required for the code-fix track)
+   ```bash
+   # macOS
+   brew install git gh
+
+   # Debian/Ubuntu
+   sudo apt-get install git gh
+   ```
+
+3. **Authenticate with GCP**
    ```bash
    gcloud auth application-default login
    ```
 
-3. **Copy and fill in env vars**
+4. **Copy and fill in env vars**
    ```bash
    cp .env.example .env
-   # edit .env with your project ID
+   # edit .env — set GOOGLE_CLOUD_PROJECT, and GITHUB_REPO_URL + GITHUB_TOKEN for code-fix track
    ```
 
-4. **Run with a test error message**
+5. **Run with a test error message**
+
+   Set `ERROR_MESSAGE` in `.env` to one of the examples below, then:
    ```bash
-   ERROR_MESSAGE="Service dinoquest2 is failing: container exited with code 1 after recent deploy" \
    python main.py
    ```
-
    `ERROR_MESSAGE` bypasses the HTTP server for local testing. In production the message arrives from Eventarc as an HTTP POST.
+
+### Test messages by track
+
+**Infra track — OOM** (also triggers OOM root-cause track if `GITHUB_REPO_URL` is set)
+```
+{"severity":"ERROR","resource":{"type":"cloud_run_revision","labels":{"service_name":"dinoquest2","revision_name":"dinoquest2-00001-abc"}},"textPayload":"Memory limit of 128 MiB exceeded with 128 MiB used. Consider increasing the memory limit, see https://cloud.google.com/run/docs/configuring/memory-limits","timestamp":"2026-04-17T18:26:06Z"}
+```
+
+**Infra track — bad deploy / rollback**
+```
+{"severity":"ERROR","resource":{"type":"cloud_run_revision","labels":{"service_name":"dinoquest2"}},"textPayload":"Revision dinoquest2-00042-abc failed health check: container failed to start.","timestamp":"2026-04-17T18:26:06Z"}
+```
+
+**Code-fix track — application bug** (requires `GITHUB_REPO_URL` and `GITHUB_TOKEN`)
+```
+{"severity":"ERROR","resource":{"type":"cloud_run_revision","labels":{"service_name":"dinoquest2"}},"textPayload":"Traceback (most recent call last):\n  File \"/app/main.py\", line 42, in handle_request\n    result = process_data(payload)\n  File \"/app/processor.py\", line 17, in process_data\n    return data[\"items\"][0]\nKeyError: \"items\"","timestamp":"2026-04-17T18:26:06Z"}
+```
+
+**To test rollback** — after a code-fix run, pass the branch name back:
+```
+Roll back the fix on branch incident_2604201826 for service dinoquest2
+```
 
 ---
 
@@ -192,7 +210,7 @@ gcloud run deploy remediation-agent \
   --service-account=$SA \
   --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_GENAI_USE_VERTEXAI=True" \
   --set-env-vars="GITHUB_REPO_URL=https://github.com/org/repo" \
-  --set-env-vars GITHUB_TOKEN_SECRET=projects/${PROJECT_ID}/secrets/github-token/versions/latest \
+  --set-secrets="GITHUB_TOKEN=github-token:latest" \
   --no-allow-unauthenticated \
   --timeout=300
 ```
@@ -218,16 +236,9 @@ gcloud logging sinks create cloud-run-errors-sink \
 ```
 
 > Scope the filter to the specific service name you want to monitor. Adjust `resource.labels.service_name` as needed.
+> The `NOT logName=~"cloudaudit"` clause is important — without it the agent will process its own GCP API audit logs and chase its tail.
 
-Then grant the sink's writer identity permission to publish to the topic. The writer identity is printed when the sink is created — use the value from that output:
-
-```bash
-gcloud pubsub topics add-iam-policy-binding cloud-run-errors \
-  --member="serviceAccount:service-PROJECT_NUMBER@gcp-sa-logging.iam.gserviceaccount.com" \
-  --role="roles/pubsub.publisher"
-```
-
-Or retrieve it programmatically:
+Then grant the sink's writer identity permission to publish to the topic:
 
 ```bash
 SINK_SA=$(gcloud logging sinks describe cloud-run-errors-sink --format='value(writerIdentity)')
@@ -282,4 +293,4 @@ gcloud run services update remediation-agent --image=$IMAGE --region=us-central1
 
 ## Customizing the agent
 
-Edit `skills/remediation.md` to change the agent's behavior — add new remediation strategies, adjust guardrails, or extend the output format — without touching any Python code. Rebuild and redeploy the image to pick up changes.
+Edit `skills/remediation/SKILL.md` to change the agent's behavior — add new remediation strategies, adjust guardrails, or extend the output format — without touching any Python code. Rebuild and redeploy the image to pick up changes.
