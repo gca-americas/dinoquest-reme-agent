@@ -208,6 +208,7 @@ gcloud run deploy remediation-agent \
   --image=$IMAGE \
   --region=us-central1 \
   --service-account=$SA \
+  --memory=2Gi \
   --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_GENAI_USE_VERTEXAI=True" \
   --set-env-vars="GITHUB_REPO_URL=https://github.com/org/repo" \
   --set-secrets="GITHUB_TOKEN=github-token:latest" \
