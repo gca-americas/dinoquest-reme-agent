@@ -88,7 +88,7 @@ def _notify_slack(summary: str) -> None:
             json={"text": text},
             timeout=10,
         )
-        if resp.status_code != 200:
+        if resp.status_code != 200 or resp.text != "ok":
             log.warning("Slack notification failed: HTTP %s — %s", resp.status_code, resp.text)
         else:
             log.info("Slack notification sent")
