@@ -7,10 +7,17 @@ LOCAL_PATH="${1:?local_path required}"
 REL_PATH="${2:?relative_file_path required}"
 TARGET="$LOCAL_PATH/$REL_PATH"
 
+if [[ -d "$TARGET" ]]; then
+  # Directory listing mode — show files one level deep
+  listing=$(ls -1 "$TARGET")
+  echo "$listing" | jq -Rs --arg dir "$REL_PATH" '{status:"ok", type:"directory", path:$dir, listing:.}'
+  exit 0
+fi
+
 if [[ ! -f "$TARGET" ]]; then
   echo "{\"status\":\"error\",\"message\":\"File not found: $REL_PATH\"}" >&2
   exit 1
 fi
 
 # jq encodes the content safely as a JSON string.
-jq -Rs --arg file "$REL_PATH" '{status:"ok", file:$file, content:.}' < "$TARGET"
+jq -Rs --arg file "$REL_PATH" '{status:"ok", type:"file", file:$file, content:.}' < "$TARGET"

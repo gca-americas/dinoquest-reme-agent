@@ -40,10 +40,13 @@ Always use these fixed tiers — never double the current service memory:
 | 1Gi | 2Gi |
 | 2Gi | 4Gi |
 | 4Gi | increase CPU to 2 first, then set memory to 4Gi |
+| 8Gi | **Maximum reached — do not increase further.** Report and exit. |
 
 **The tier is determined by what the error log says was exceeded, not by the current service config.**
 If the error does not state a specific limit, read it from `_get_service` and apply the tier above.
 Never set memory above 4Gi on a 1-CPU service — Cloud Run will reject it.
+Never set memory above 8Gi on a 2-CPU service — Cloud Run will reject it.
+If the current memory is already at 8Gi, do not attempt any memory increase — report the cap and exit.
 
 ### Identifying memory issues
 Look for any of these signals in the error message or service conditions:
@@ -66,8 +69,11 @@ finds and fixes the underlying leak or inefficiency in code.
 **Workflow**
 
 1. Call `_clone_repo` to get `local_path`.
-2. Read likely culprit files with `_read_repo_file` — start with the main entrypoint, then any file
-   that handles large data, caching, or unbounded collections (lists, dicts, buffers).
+2. Call `_read_repo_file(local_path, ".")` — this lists the top-level directory so you can see the
+   actual file/folder structure before guessing paths. If the source is in a subdirectory (e.g.
+   `backend/`, `src/`, `app/`), call `_read_repo_file(local_path, "<subdir>")` to list it.
+3. Read likely culprit files with `_read_repo_file` — start with the main entrypoint you discovered
+   above, then any file that handles large data, caching, or unbounded collections (lists, dicts, buffers).
 3. Look for classic memory leak patterns:
    - Objects accumulated in a global list/dict and never cleared
    - Large payloads loaded entirely into memory instead of streamed
