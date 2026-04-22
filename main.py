@@ -27,6 +27,8 @@ import os
 import threading
 from datetime import datetime, timedelta, timezone
 
+import re
+
 import requests
 from dotenv import load_dotenv
 
@@ -78,14 +80,35 @@ def _resolve_slack_webhook() -> None:
     log.info("SLACK_WEBHOOK_URL loaded from Secret Manager")
 
 
+def _build_slack_blocks(summary: str) -> dict:
+    # Convert GitHub-flavoured markdown to Slack mrkdwn
+    text = re.sub(r"^## (.+)$", r"*\1*", summary, flags=re.MULTILINE)
+    text = re.sub(r"\*\*(.+?)\*\*", r"*\1*", text)
+    text = text.strip()
+
+    # Split into ≤2900-char chunks (Block Kit section limit is 3000)
+    chunks, limit = [], 2900
+    for i in range(0, len(text), limit):
+        chunks.append(text[i : i + limit])
+    chunks = chunks[:3]  # max 3 sections to stay under Slack's 50-block limit
+
+    blocks: list = [
+        {"type": "header", "text": {"type": "plain_text", "text": "DinoAgent Remediation", "emoji": True}},
+        {"type": "divider"},
+    ]
+    for chunk in chunks:
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": chunk}})
+
+    return {"text": "DinoAgent Remediation", "blocks": blocks}
+
+
 def _notify_slack(summary: str) -> None:
     if not _SLACK_WEBHOOK_URL:
         return
     try:
-        text = f"*DinoAgent Remediation*\n```{summary[:3000]}```"
         resp = requests.post(
             _SLACK_WEBHOOK_URL,
-            json={"text": text},
+            json=_build_slack_blocks(summary),
             timeout=10,
         )
         if resp.status_code != 200 or resp.text != "ok":
