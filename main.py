@@ -37,7 +37,9 @@ load_dotenv()
 from flask import Flask, request as flask_request
 from google.genai import types
 
+from agent import set_correlation_id
 from runner import APP_NAME, build_runner
+from utils import emit_event, resolve_secret
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -55,29 +57,12 @@ _SLACK_WEBHOOK_URL: str = ""
 
 
 def _resolve_slack_webhook() -> None:
-    """Ensure _SLACK_WEBHOOK_URL is set.
-
-    Resolution order:
-    1. SLACK_WEBHOOK_URL env var (local dev or Cloud Run --set-env-vars).
-    2. Fetch from Secret Manager using the resource name in SLACK_WEBHOOK_SECRET
-       (e.g. 'projects/my-project/secrets/slack-webhook/versions/latest').
-    """
     global _SLACK_WEBHOOK_URL
-    url = os.environ.get("SLACK_WEBHOOK_URL", "")
-    if url:
-        _SLACK_WEBHOOK_URL = url
-        return
-
-    secret_name = os.environ.get("SLACK_WEBHOOK_SECRET", "")
-    if not secret_name:
+    val = resolve_secret("SLACK_WEBHOOK_URL", "SLACK_WEBHOOK_SECRET")
+    if val:
+        _SLACK_WEBHOOK_URL = val
+    else:
         log.warning("SLACK_WEBHOOK_URL and SLACK_WEBHOOK_SECRET are both unset — Slack notifications disabled")
-        return
-
-    from google.cloud import secretmanager
-    client = secretmanager.SecretManagerServiceClient()
-    response = client.access_secret_version(name=secret_name)
-    _SLACK_WEBHOOK_URL = response.payload.data.decode()
-    log.info("SLACK_WEBHOOK_URL loaded from Secret Manager")
 
 
 def _build_slack_blocks(summary: str) -> dict:
@@ -148,6 +133,8 @@ def _decode_envelope(envelope: dict) -> str:
 
 
 async def _run(error_message: str, session_id: str) -> None:
+    set_correlation_id(session_id)
+    emit_event("DinoAgent", "detected_error", {"error_preview": error_message[:200]}, session_id)
     runner = build_runner()
     await runner.session_service.create_session(
         app_name=APP_NAME,
@@ -166,6 +153,7 @@ async def _run(error_message: str, session_id: str) -> None:
     ):
         if event.is_final_response() and event.content and event.content.parts:
             final_response = event.content.parts[0].text
+    emit_event("DinoAgent", "thinking", {"summary": final_response[:300]}, session_id)
     log.info("Remediation complete:\n%s", final_response)
     _notify_slack(final_response)
 

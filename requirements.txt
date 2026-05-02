@@ -1,8 +1,11 @@
-google-adk>=1.0.0
+google-adk>=1.32.0
+a2a-sdk>=0.3.0,<1.0.0
 google-cloud-run>=0.10.0
 google-cloud-secret-manager>=2.0.0
+google-cloud-pubsub>=2.0.0
 google-auth>=2.0.0
 python-dotenv>=1.0.0
 flask>=3.0.0
 gunicorn>=22.0.0
 requests>=2.32.0
+markupsafe>=2.0,<3.0

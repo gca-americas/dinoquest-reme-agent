@@ -1,6 +1,37 @@
-# Cloud Run Remediation Agent
+# DinoAgent (Cloud Run Remediation Agent)
 
 An ADK agent that listens for Cloud Run error logs, diagnoses the root cause, and automatically remediates — deployed as a Cloud Run Service triggered by Eventarc.
+
+Also acts as the **orchestrator** in the Section 3 agent team: receives chat messages via chat-bridge, delegates CI builds to CIAgent and canary deploys to CDAgent via A2A, and teaches new skills to CIAgent when it encounters unclassified failures (Behavior B).
+
+## Changes from Section 1
+
+Added in the Section 3 refactor:
+
+- `utils.py` — `emit_event()` publishes structured events to the `harness-events` Pub/Sub topic. `resolve_secret()` consolidates the Secret Manager pattern that was duplicated across `main.py` and `agent.py`.
+- `main.py` — emits `detected_error` when remediation starts and `thinking` with the abbreviated final response when it ends.
+- `agent.py` — each tool closure emits a `thinking` event before executing, so every meaningful action is observable in real time (see table below).
+- `requirements.txt` — added `google-cloud-pubsub`.
+- New env var: `HARNESS_EVENTS_TOPIC=projects/{project}/topics/harness-events` (optional — events are silently skipped if unset, so Section 1 behavior is unchanged).
+
+The OOM remediation flow, Slack notifications, Eventarc trigger, and all shell scripts are unchanged.
+
+### Pub/Sub events emitted
+
+Every event is published to the `harness-events` topic with `"agent": "DinoAgent"`.
+
+| Source | `event_type` | `payload` fields | dino-theater station |
+|---|---|---|---|
+| `main.py` — on trigger | `detected_error` | `error_preview` (≤200 chars) | Cloud General |
+| `agent.py` — `_rollback_traffic` | `thinking` | `summary`: `Rolling back Cloud Run {svc} → {rev} ({pct}% traffic)` | Cloud Run |
+| `agent.py` — `_update_service_env_vars` | `thinking` | `summary`: `Updating Cloud Run {svc} env vars: {keys}` | Cloud Run |
+| `agent.py` — `_update_service_resources` | `thinking` | `summary`: `Patching Cloud Run {svc}: memory → {mem}` | Cloud Run |
+| `agent.py` — `_apply_code_fix` | `thinking` | `summary`: `Applying fix: editing {file} to resolve root cause` | Source Code |
+| `agent.py` — `_commit_to_incident_branch` | `thinking` | `summary`: `Pushing branch: committing fix — {commit_message}` | GitHub |
+| `agent.py` — `_open_pull_request` | `thinking` | `summary`: `Opening pull request: {title}` | GitHub |
+| `agent.py` — `_rollback_fix` | `thinking` | `summary`: `Rolling back code fix: closing PR and deleting branch {branch}` | GitHub |
+| `agent.py` — `_announce_ci_call` | `a2a_call_sent` | `target_agent`: `CIAgent`, `method`: `teach_skill`, `args_preview`: message preview | GitHub |
+| `main.py` — on completion | `thinking` | `summary`: LLM final response (≤300 chars) | varies |
 
 ## How it works
 
@@ -97,6 +128,7 @@ The code-fix track creates a branch named `incident_YYMMDDHH` (from the error lo
 | `GIT_AUTHOR_EMAIL` | No | `dinoagent@noreply.github.com` | Git commit author email |
 | `SLACK_WEBHOOK_URL` | For Slack notifications | — | Incoming webhook URL for a Slack channel |
 | `SLACK_WEBHOOK_SECRET` | For Slack notifications (prod) | — | Secret Manager resource name, e.g. `projects/my-project/secrets/slack-webhook/versions/latest` |
+| `CIAGENT_URL` | For A2A skill teaching | — | Base URL of CIAgent Cloud Run service, e.g. `https://ci-agent-xxx-uc.a.run.app` |
 
 ---
 
@@ -254,7 +286,13 @@ gcloud builds submit --tag $IMAGE .
 ### 2. Deploy the Cloud Run Service
 
 ```bash
+PROJECT_ID=$(gcloud config get-value project)
 SA="remediation-agent@${PROJECT_ID}.iam.gserviceaccount.com"
+TOPIC="projects/${PROJECT_ID}/topics/harness-events"
+GITHUB="https://github.com/weimeilin79/DinoQuest"
+PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format="value(projectNumber)")
+CIAGENT_URL=https://ci-agent-${PROJECT_NUMBER}.us-central1.run.app
+
 
 gcloud run deploy remediation-agent \
   --image=$IMAGE \
@@ -262,8 +300,10 @@ gcloud run deploy remediation-agent \
   --service-account=$SA \
   --memory=2Gi \
   --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_GENAI_USE_VERTEXAI=True" \
-  --set-env-vars="GITHUB_REPO_URL=https://github.com/weimeilin79/DinoQuest" \
+  --set-env-vars="GITHUB_REPO_URL=${GITHUB}" \
   --set-env-vars="SLACK_WEBHOOK_SECRET=projects/${PROJECT_ID}/secrets/slack-webhook/versions/latest" \
+  --set-env-vars="HARNESS_EVENTS_TOPIC=${TOPIC}"\
+  --set-env-vars="CIAGENT_URL=${CIAGENT_URL}" \
   --set-secrets="GITHUB_TOKEN=github-token:latest" \
   --no-allow-unauthenticated \
   --timeout=300
@@ -284,7 +324,7 @@ gcloud pubsub topics create cloud-run-errors
 Route error logs from Cloud Run to the Pub/Sub topic:
 
 ```bash
-FILTER='resource.type="cloud_run_revision" resource.labels.service_name="dinoquest2" severity=ERROR NOT logName=~"cloudaudit" NOT httpRequest.requestUrl=~"/_ah/health"'
+FILTER='resource.type="cloud_run_revision" resource.labels.service_name="dinoquest" severity=ERROR NOT logName=~"cloudaudit" NOT httpRequest.requestUrl=~"/_ah/health"'
 
 gcloud logging sinks create cloud-run-errors-sink \
   pubsub.googleapis.com/projects/${PROJECT_ID}/topics/cloud-run-errors \
