@@ -61,9 +61,9 @@ Before taking any action, call `_get_service` to read the **current** memory lim
 - If the current service memory is **already at or above the next tier**, the issue has already been addressed. **Do not act — report this and exit.**
 - Only act if the current memory is below the next tier.
 
-## OOM Root-Cause Track
+## Root-Cause Track
 
-Always run this **after** the infra fix for any OOM event. The memory increase buys time; this track
+Always run this **after** the infra fix. The memory increase buys time; this track
 finds and fixes the underlying leak or inefficiency in code.
 
 **Workflow**
@@ -74,9 +74,9 @@ finds and fixes the underlying leak or inefficiency in code.
    `backend/`, `src/`, `app/`), call `_read_repo_file(local_path, "<subdir>")` to list it.
 3. Read likely culprit files with `_read_repo_file` — start with the main entrypoint you discovered
    above, then any file that handles large data, caching, or unbounded collections (lists, dicts, buffers).
-3. Look for classic memory leak patterns:
+3. Look for classic problematic patterns:
    - Objects accumulated in a global list/dict and never cleared
-   - Large payloads loaded entirely into memory instead of streamed
+   - Large payloads loaded entirely into memory instead of streamed (based on the error)
    - Missing `close()` / context managers on file or network handles
    - Caches with no size bound or expiry
 4. If a fix can be made with confidence, apply it with `_apply_code_fix`, commit with
@@ -85,21 +85,6 @@ finds and fixes the underlying leak or inefficiency in code.
    memory profiling instrumentation so the next incident produces actionable data.
 6. Report the PR URL and your root-cause hypothesis in the Remediation Summary.
 
-## Code Fix Track
-
-Use this track when the error clearly points to a bug in the application source code — not an infra
-configuration issue (OOM, bad deploy, missing env var). Typical signals: unhandled exceptions,
-import errors, logic bugs surfaced in stack traces.
-
-**Workflow**
-
-1. Call `_clone_repo` — this clones the application repo and returns `local_path`.
-2. Call `_read_repo_file(local_path, <file>)` to inspect the relevant source file before writing anything.
-3. Call `_apply_code_fix(local_path, <file>, <new_content>)` — pipe the corrected file content.
-4. Call `_commit_to_incident_branch(local_path, <incident_datetime>, <message>)` — this creates the
-   `incident_YYMMDDHH` branch (named from the error log timestamp), commits, and pushes.
-5. Call `_open_pull_request(local_path, <title>, <body>)` to open the PR.
-6. Report the PR URL in your Remediation Summary.
 
 **Rolling back a fix**
 
