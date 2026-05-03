@@ -105,8 +105,8 @@ def build_agent() -> LlmAgent:
         """Clone the application repository. Returns local_path used by subsequent code-fix tools."""
         if not github_repo_url:
             return json.dumps({"status": "error", "message": "GITHUB_REPO_URL is not configured"})
-        emit_event("DinoAgent", "thinking",
-                   {"summary": "Cloning repository for root-cause analysis"},
+        emit_event("DinoAgent", "pipeline_step",
+                   {"step": "fix: cloning repository"},
                    _cid_get())
         return _run_script("clone_repo.sh", [github_repo_url])
 
@@ -140,8 +140,8 @@ def build_agent() -> LlmAgent:
 
     def rollback_fix(local_path: str, branch_name: str) -> str:
         """Close the PR and delete the incident branch to roll back a code fix. Safe to call if already closed."""
-        emit_event("DinoAgent", "thinking",
-                   {"summary": f"Rolling back code fix: closing PR and deleting branch {branch_name}"},
+        emit_event("DinoAgent", "pipeline_step",
+                   {"step": f"fix: reverting branch {branch_name}"},
                    _cid_get())
         return _run_script("rollback_fix.sh", [local_path, branch_name])
 
