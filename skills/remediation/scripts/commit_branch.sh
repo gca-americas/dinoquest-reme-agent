@@ -14,6 +14,12 @@ BRANCH="incident_$(date -ud "$INCIDENT_DT" '+%y%m%d%H' 2>/dev/null || date -u '+
 
 cd "$LOCAL_PATH"
 
+# If the branch already exists on the remote (prior run for the same incident hour),
+# append current minutes+seconds to avoid a non-fast-forward push rejection.
+if git ls-remote --exit-code --heads origin "$BRANCH" > /dev/null 2>&1; then
+    BRANCH="${BRANCH}_$(date -u '+%M%S')"
+fi
+
 git checkout -b "$BRANCH"         || { echo "{\"status\":\"error\",\"step\":\"checkout\"}"; exit 1; }
 git add -A                        || { echo "{\"status\":\"error\",\"step\":\"add\"}";      exit 1; }
 git commit -m "$COMMIT_MSG"       || { echo "{\"status\":\"error\",\"step\":\"commit\"}";   exit 1; }

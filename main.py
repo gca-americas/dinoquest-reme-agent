@@ -233,6 +233,13 @@ async def _run(error_message: str, session_id: str) -> None:
     _notify_slack(final_response)
 
 
+def _run_sync(error_message: str, session_id: str) -> None:
+    try:
+        asyncio.run(_run(error_message, session_id))
+    except Exception:
+        log.exception("Remediation failed for session %s", session_id)
+
+
 @app.route("/", methods=["POST"])
 def handle_event():
     envelope = flask_request.get_json(silent=True)
@@ -254,12 +261,15 @@ def handle_event():
 
     log.info("Received event %s", message_id)
 
-    try:
-        asyncio.run(_run(error_message, session_id=f"session-{message_id}"))
-    except Exception:
-        log.exception("Remediation failed for message %s", message_id)
-        return "Internal Server Error", 500
-
+    # Ack Pub/Sub immediately — keeping the request open for the full remediation
+    # (~2 min) causes redeliveries when Cloud Run terminates the instance mid-run.
+    # daemon=False keeps the process alive past gunicorn shutdown so Cloud Run's
+    # termination grace period (set to ≥300s in the service config) covers the run.
+    threading.Thread(
+        target=_run_sync,
+        args=(error_message, f"session-{message_id}"),
+        daemon=False,
+    ).start()
     return ("", 204)
 
 
