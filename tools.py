@@ -1,6 +1,35 @@
 import json
+import time
+from typing import Callable
 
+from google.api_core import exceptions as _api_exc
 from google.cloud import run_v2
+
+
+def _update_with_retry(
+    name: str,
+    mutate: Callable[[run_v2.Service], None],
+    max_retries: int = 4,
+) -> run_v2.Service:
+    """Fetch → mutate → update_service, retrying on optimistic-lock conflicts (ABORTED).
+
+    The Cloud Run API uses etag-based optimistic locking. When two concurrent
+    callers both fetch the same version and one updates first, the other gets
+    ABORTED. We re-fetch and re-apply the mutation on each retry.
+    """
+    client = run_v2.ServicesClient()
+    for attempt in range(max_retries + 1):
+        svc = client.get_service(name=name)
+        mutate(svc)
+        try:
+            # timeout=300: Cloud Run LROs can queue behind concurrent updates;
+            # the default gRPC deadline (~60s) is too short in those cases.
+            return client.update_service(service=svc).result(timeout=300)
+        except _api_exc.Aborted:
+            if attempt == max_retries:
+                raise
+            time.sleep(1.5 ** attempt)  # 1s, 1.5s, 2.25s, 3.4s
+    raise RuntimeError("unreachable")
 
 
 def list_services(project_id: str, region: str) -> str:
@@ -82,20 +111,18 @@ def rollback_traffic(
     percent: int = 100,
 ) -> str:
     """Route traffic to a specific revision. Use for rollbacks. percent defaults to 100."""
-    client = run_v2.ServicesClient()
     name = f"projects/{project_id}/locations/{region}/services/{service_name}"
-    svc = client.get_service(name=name)
 
-    svc.traffic = [
-        run_v2.TrafficTarget(
-            type_=run_v2.TrafficTargetAllocationType.TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION,
-            revision=revision_name,
-            percent=percent,
-        )
-    ]
+    def _mutate(svc):
+        svc.traffic = [
+            run_v2.TrafficTarget(
+                type_=run_v2.TrafficTargetAllocationType.TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION,
+                revision=revision_name,
+                percent=percent,
+            )
+        ]
 
-    op = client.update_service(service=svc)
-    op.result()
+    _update_with_retry(name, _mutate)
     return json.dumps({"status": "traffic_updated", "revision": revision_name, "percent": percent})
 
 
@@ -111,23 +138,22 @@ def update_service_resources(
     memory: e.g. '512Mi', '1Gi', '2Gi', '4Gi'
     cpu:    e.g. '1', '2', '4'
     """
-    client = run_v2.ServicesClient()
     name = f"projects/{project_id}/locations/{region}/services/{service_name}"
-    svc = client.get_service(name=name)
 
-    current_limits = dict(svc.template.containers[0].resources.limits)
-    if memory:
-        current_limits["memory"] = memory
-    if cpu:
-        current_limits["cpu"] = cpu
-    svc.template.containers[0].resources.limits = current_limits
+    def _mutate(svc):
+        current_limits = dict(svc.template.containers[0].resources.limits)
+        if memory:
+            current_limits["memory"] = memory
+        if cpu:
+            current_limits["cpu"] = cpu
+        svc.template.containers[0].resources.limits = current_limits
 
-    op = client.update_service(service=svc)
-    result = op.result()
+    result = _update_with_retry(name, _mutate)
+    new_limits = dict(result.template.containers[0].resources.limits)
     return json.dumps({
         "status": "updated",
         "service": service_name,
-        "new_limits": current_limits,
+        "new_limits": new_limits,
         "new_revision": result.latest_created_revision.split("/")[-1] if result.latest_created_revision else None,
     })
 
@@ -139,18 +165,16 @@ def update_service_env_vars(
     env_vars: dict,
 ) -> str:
     """Add or update environment variables on a Cloud Run service. Triggers a new revision."""
-    client = run_v2.ServicesClient()
     name = f"projects/{project_id}/locations/{region}/services/{service_name}"
-    svc = client.get_service(name=name)
 
-    existing = {e.name: e.value for e in svc.template.containers[0].env if e.value}
-    existing.update(env_vars)
-    svc.template.containers[0].env = [
-        run_v2.EnvVar(name=k, value=v) for k, v in existing.items()
-    ]
+    def _mutate(svc):
+        existing = {e.name: e.value for e in svc.template.containers[0].env if e.value}
+        existing.update(env_vars)
+        svc.template.containers[0].env = [
+            run_v2.EnvVar(name=k, value=v) for k, v in existing.items()
+        ]
 
-    op = client.update_service(service=svc)
-    result = op.result()
+    result = _update_with_retry(name, _mutate)
     return json.dumps({
         "status": "updated",
         "service": service_name,

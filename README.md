@@ -113,6 +113,16 @@ The code-fix track creates a branch named `incident_YYMMDDHH` (from the error lo
 
    gcloud projects add-iam-policy-binding $PROJECT_ID \
      --member="serviceAccount:${SA}" --role="roles/secretmanager.secretAccessor"
+
+   # Allow publishing to the theater event topic
+   gcloud pubsub topics add-iam-policy-binding harness-events \
+     --member="serviceAccount:${SA}" --role="roles/pubsub.publisher"
+
+   # Allow Cloud Build jobs to run (needed when handing off to CIAgent)
+   PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format="value(projectNumber)")
+   gcloud iam service-accounts add-iam-policy-binding \
+     ${PROJECT_NUMBER}-compute@developer.gserviceaccount.com \
+     --member="serviceAccount:${SA}" --role="roles/iam.serviceAccountUser"
    ```
 
 ### Environment variables

@@ -121,39 +121,18 @@ def _notify_slack(summary: str) -> None:
         log.warning("Slack notification failed: %s", e)
 
 
-_VOLATILE_JSON_FIELDS = frozenset({
-    "timestamp", "time", "ts", "datetime",
-    "traceId", "trace_id", "spanId", "span_id",
-    "requestId", "request_id", "insertId", "insert_id",
-    "receiveTimestamp", "receive_timestamp",
-    "logName", "log_name",
-})
-
 
 def _fingerprint(error_message: str) -> str:
-    """Stable key for a (service, error type) pair, ignoring timestamps and request IDs."""
+    """Stable key for a service — one remediation per service per dedup window.
+
+    Keyed on service_name so that multiple different errors from the same service
+    within the window don't each spin up their own remediation run.
+    Falls back to the raw message prefix if no service name can be extracted.
+    """
     try:
         entry = json.loads(error_message)
         service = entry.get("resource", {}).get("labels", {}).get("service_name", "")
-        if entry.get("textPayload"):
-            text = entry["textPayload"]
-        else:
-            payload = entry.get("jsonPayload", {})
-            if isinstance(payload, dict):
-                # Prefer an explicit message field; fall back to stable subset of the payload
-                text = (
-                    payload.get("message")
-                    or payload.get("msg")
-                    or payload.get("error")
-                    or payload.get("exception")
-                    or json.dumps(
-                        {k: v for k, v in sorted(payload.items()) if k not in _VOLATILE_JSON_FIELDS},
-                        sort_keys=True,
-                    )
-                )
-            else:
-                text = str(payload)
-        key = f"{service}:{str(text)[:200]}"
+        key = service if service else error_message[:200]
     except (json.JSONDecodeError, AttributeError):
         key = error_message[:200]
     return hashlib.sha256(key.encode()).hexdigest()
