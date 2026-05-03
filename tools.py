@@ -1,9 +1,12 @@
 import json
+import logging
 import time
 from typing import Callable
 
 from google.api_core import exceptions as _api_exc
 from google.cloud import run_v2
+
+log = logging.getLogger(__name__)
 
 
 def _update_with_retry(
@@ -18,17 +21,24 @@ def _update_with_retry(
     ABORTED. We re-fetch and re-apply the mutation on each retry.
     """
     client = run_v2.ServicesClient()
+    service_name = name.split("/")[-1]
     for attempt in range(max_retries + 1):
         svc = client.get_service(name=name)
         mutate(svc)
         try:
             # timeout=300: Cloud Run LROs can queue behind concurrent updates;
             # the default gRPC deadline (~60s) is too short in those cases.
-            return client.update_service(service=svc).result(timeout=300)
+            result = client.update_service(service=svc).result(timeout=300)
+            if attempt > 0:
+                log.info("update_service %s succeeded on attempt %d", service_name, attempt + 1)
+            return result
         except _api_exc.Aborted:
             if attempt == max_retries:
                 raise
-            time.sleep(1.5 ** attempt)  # 1s, 1.5s, 2.25s, 3.4s
+            wait = 1.5 ** attempt
+            log.warning("update_service %s ABORTED (version conflict), retrying in %.1fs (attempt %d/%d)",
+                        service_name, wait, attempt + 1, max_retries)
+            time.sleep(wait)
     raise RuntimeError("unreachable")
 
 

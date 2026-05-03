@@ -122,8 +122,8 @@ def _notify_slack(summary: str) -> None:
 
 
 
-def _fingerprint(error_message: str) -> str:
-    """Stable key for a service — one remediation per service per dedup window.
+def _fingerprint(error_message: str) -> tuple[str, str]:
+    """Return (fingerprint_hex, dedup_key) for the error.
 
     Keyed on service_name so that multiple different errors from the same service
     within the window don't each spin up their own remediation run.
@@ -135,11 +135,12 @@ def _fingerprint(error_message: str) -> str:
         key = service if service else error_message[:200]
     except (json.JSONDecodeError, AttributeError):
         key = error_message[:200]
-    return hashlib.sha256(key.encode()).hexdigest()
+    return hashlib.sha256(key.encode()).hexdigest(), key
 
 
 def _is_duplicate(error_message: str) -> bool:
-    fp = _fingerprint(error_message)
+    fp, dedup_key = _fingerprint(error_message)
+    log.debug("dedup key: %r  fp: %s", dedup_key, fp[:8])
     now = datetime.now(timezone.utc)
 
     # Fast path: in-memory check (avoids a Firestore round-trip on same instance)
