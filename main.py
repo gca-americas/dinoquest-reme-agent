@@ -153,7 +153,8 @@ async def _run(error_message: str, session_id: str) -> None:
     ):
         if event.is_final_response() and event.content and event.content.parts:
             final_response = event.content.parts[0].text
-    emit_event("DinoAgent", "thinking", {"summary": final_response[:300]}, session_id)
+    if final_response:
+        emit_event("DinoAgent", "thinking", {"summary": final_response[:300]}, session_id)
     log.info("Remediation complete:\n%s", final_response)
     _notify_slack(final_response)
 
