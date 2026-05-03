@@ -12,9 +12,12 @@ def resolve_secret(env_var: str, secret_env_var: str) -> str | None:
     if val := os.environ.get(env_var):
         return val
     if name := os.environ.get(secret_env_var):
-        from google.cloud import secretmanager
-        client = secretmanager.SecretManagerServiceClient()
-        return client.access_secret_version(name=name).payload.data.decode()
+        try:
+            from google.cloud import secretmanager
+            client = secretmanager.SecretManagerServiceClient()
+            return client.access_secret_version(name=name).payload.data.decode()
+        except Exception as e:
+            log.warning("resolve_secret(%s) failed: %s", secret_env_var, e)
     return None
 
 

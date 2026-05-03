@@ -51,7 +51,14 @@ def _run_script(script: str, args: list[str], stdin: str | None = None) -> str:
         text=True,
         input=stdin,
     )
-    return r.stdout.strip() if r.returncode == 0 else r.stderr.strip()
+    if r.returncode == 0:
+        return r.stdout.strip()
+    # Include both stderr and stdout so the agent (and logs) can see the actual error.
+    # clone_repo.sh sends the git error through stdout (via sed pipe) and its own
+    # JSON error to stderr — we need both to diagnose failures.
+    parts = [p for p in (r.stderr.strip(), r.stdout.strip()) if p]
+    log.error("Script %s exited %d: %s", script, r.returncode, " | ".join(parts))
+    return " | ".join(parts) or f"exit code {r.returncode}"
 
 
 def build_agent() -> LlmAgent:
