@@ -129,6 +129,7 @@ The code-fix track creates a branch named `incident_YYMMDDHH` (from the error lo
 | `SLACK_WEBHOOK_URL` | For Slack notifications | — | Incoming webhook URL for a Slack channel |
 | `SLACK_WEBHOOK_SECRET` | For Slack notifications (prod) | — | Secret Manager resource name, e.g. `projects/my-project/secrets/slack-webhook/versions/latest` |
 | `CIAGENT_URL` | For A2A skill teaching | — | Base URL of CIAgent Cloud Run service, e.g. `https://ci-agent-xxx-uc.a.run.app` |
+| `HARNESS_EVENTS_TOPIC` | For dino-theater | — | Full Pub/Sub topic resource name, e.g. `projects/{project}/topics/harness-events`. Events silently skipped if unset. |
 
 ---
 
@@ -269,6 +270,26 @@ gcloud secrets add-iam-policy-binding github-token \
 ```
 Roll back the fix on branch incident_2604201826 for service dinoquest2
 ```
+
+### Resetting dedup between test runs
+
+The agent deduplicates events for 5 minutes (in-memory + Firestore). To re-trigger the same error without waiting, flush the dedup state:
+
+```bash
+# Local
+curl -X POST http://localhost:8080/flush-dedup
+
+# Cloud Run
+curl -X POST https://<remediation-agent-url>/flush-dedup \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)"
+```
+
+Response:
+```json
+{"ok": true, "cleared_local": 3, "cleared_firestore": 3}
+```
+
+This clears all entries from the in-memory cache and the `remediation_dedup` Firestore collection. The next matching error will be processed as fresh.
 
 ---
 

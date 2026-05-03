@@ -273,6 +273,30 @@ def handle_event():
     return ("", 204)
 
 
+@app.route("/flush-dedup", methods=["POST"])
+def flush_dedup():
+    """Clear the in-memory and Firestore dedup caches so the next error is processed fresh.
+    Useful for demos and testing — not intended for production use.
+    """
+    with _dedup_lock:
+        cleared_local = len(_dedup_cache)
+        _dedup_cache.clear()
+
+    cleared_firestore = 0
+    db = _get_db()
+    if db:
+        try:
+            docs = db.collection("remediation_dedup").list_documents()
+            for doc in docs:
+                doc.delete()
+                cleared_firestore += 1
+        except Exception as exc:
+            log.warning("flush-dedup: Firestore clear failed: %s", exc)
+
+    log.info("flush-dedup: cleared %d local + %d Firestore entries", cleared_local, cleared_firestore)
+    return {"ok": True, "cleared_local": cleared_local, "cleared_firestore": cleared_firestore}
+
+
 _resolve_slack_webhook()
 
 if __name__ == "__main__":
