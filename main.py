@@ -31,6 +31,7 @@ import re
 
 import requests
 from dotenv import load_dotenv
+from google.cloud import firestore as _firestore
 
 load_dotenv()
 
@@ -48,10 +49,26 @@ app = Flask(__name__)
 
 _USER_ID = "eventarc-trigger"
 
-# In-memory dedup: fingerprint -> last handled datetime
+# In-memory dedup: fingerprint -> last handled datetime (fast path; Firestore is authoritative)
 _dedup_cache: dict[str, datetime] = {}
 _dedup_lock = threading.Lock()
 _DEDUP_WINDOW = timedelta(minutes=5)
+
+_db: _firestore.Client | None = None
+_db_lock = threading.Lock()
+
+
+def _get_db() -> _firestore.Client | None:
+    global _db
+    with _db_lock:
+        if _db is None:
+            project_id = os.environ.get("GOOGLE_CLOUD_PROJECT", "")
+            if project_id:
+                try:
+                    _db = _firestore.Client(project=project_id)
+                except Exception as exc:
+                    log.warning("Firestore client init failed — dedup is in-memory only: %s", exc)
+        return _db
 
 _SLACK_WEBHOOK_URL: str = ""
 
@@ -104,13 +121,39 @@ def _notify_slack(summary: str) -> None:
         log.warning("Slack notification failed: %s", e)
 
 
+_VOLATILE_JSON_FIELDS = frozenset({
+    "timestamp", "time", "ts", "datetime",
+    "traceId", "trace_id", "spanId", "span_id",
+    "requestId", "request_id", "insertId", "insert_id",
+    "receiveTimestamp", "receive_timestamp",
+    "logName", "log_name",
+})
+
+
 def _fingerprint(error_message: str) -> str:
-    """Stable key for a (service, error type) pair, ignoring timestamps and instance IDs."""
+    """Stable key for a (service, error type) pair, ignoring timestamps and request IDs."""
     try:
         entry = json.loads(error_message)
         service = entry.get("resource", {}).get("labels", {}).get("service_name", "")
-        text = entry.get("textPayload") or json.dumps(entry.get("jsonPayload", ""))
-        key = f"{service}:{text[:200]}"
+        if entry.get("textPayload"):
+            text = entry["textPayload"]
+        else:
+            payload = entry.get("jsonPayload", {})
+            if isinstance(payload, dict):
+                # Prefer an explicit message field; fall back to stable subset of the payload
+                text = (
+                    payload.get("message")
+                    or payload.get("msg")
+                    or payload.get("error")
+                    or payload.get("exception")
+                    or json.dumps(
+                        {k: v for k, v in sorted(payload.items()) if k not in _VOLATILE_JSON_FIELDS},
+                        sort_keys=True,
+                    )
+                )
+            else:
+                text = str(payload)
+        key = f"{service}:{str(text)[:200]}"
     except (json.JSONDecodeError, AttributeError):
         key = error_message[:200]
     return hashlib.sha256(key.encode()).hexdigest()
@@ -119,12 +162,43 @@ def _fingerprint(error_message: str) -> str:
 def _is_duplicate(error_message: str) -> bool:
     fp = _fingerprint(error_message)
     now = datetime.now(timezone.utc)
+
+    # Fast path: in-memory check (avoids a Firestore round-trip on same instance)
     with _dedup_lock:
         last = _dedup_cache.get(fp)
         if last and (now - last) < _DEDUP_WINDOW:
             return True
-        _dedup_cache[fp] = now
-    return False
+
+    # Slow path: Firestore transaction — authoritative across instances and restarts
+    db = _get_db()
+    if db is None:
+        with _dedup_lock:
+            _dedup_cache[fp] = now
+        return False
+
+    try:
+        doc_ref = db.collection("remediation_dedup").document(fp)
+
+        @_firestore.transactional
+        def _claim(transaction: _firestore.Transaction) -> bool:
+            snapshot = doc_ref.get(transaction=transaction)
+            if snapshot.exists:
+                last_seen = snapshot.to_dict().get("last_seen")
+                if last_seen and (now - last_seen) < _DEDUP_WINDOW:
+                    return True
+            transaction.set(doc_ref, {"last_seen": now})
+            return False
+
+        is_dup = _claim(db.transaction())
+        if not is_dup:
+            with _dedup_lock:
+                _dedup_cache[fp] = now
+        return is_dup
+    except Exception as exc:
+        log.warning("Firestore dedup check failed — falling back to in-memory: %s", exc)
+        with _dedup_lock:
+            _dedup_cache[fp] = now
+        return False
 
 
 def _decode_envelope(envelope: dict) -> str:
