@@ -103,10 +103,6 @@ finds and fixes the underlying leak or inefficiency in code.
    what instrumentation was added. Do NOT import the application module in the placeholder.
 9. Report the PR URL and your root-cause hypothesis in the Remediation Summary.
 
-**If CIAgent reports test failure** — do NOT retry by creating another branch. Report the failure
-in the Remediation Summary under "Root-cause PR: closed (CI failure)" and stop. Manual intervention
-is required to diagnose and fix the test.
-
 
 **Rolling back a fix**
 

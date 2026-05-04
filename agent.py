@@ -201,7 +201,15 @@ def build_agent() -> LlmAgent:
             "Your job is to diagnose the error and take corrective action. "
             "Use the remediation skill to guide your investigation and decision-making. "
             "Always inspect the current service state before acting, and never take destructive "
-            "action without evidence from the error and the service conditions."
+            "action without evidence from the error and the service conditions.\n\n"
+            "CRITICAL — OOM events require TWO mandatory steps, both must complete:\n"
+            "  Step 1: Call update_service_resources to increase memory one tier.\n"
+            "  Step 2: Immediately after, run the full Root-Cause track — clone_repo, "
+            "read files, apply_code_fix, write a self-contained test with MagicMock, "
+            "commit_to_incident_branch, open_pull_request, then call ci_agent. "
+            "Do NOT stop after the memory update. The memory fix is temporary; "
+            "the code fix is required. Never consider an OOM remediation complete "
+            "until both steps are done."
             + ci_instruction
         ),
         tools=[
