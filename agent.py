@@ -9,6 +9,7 @@ from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
 from google.adk.skills import load_skill_from_dir
 from google.adk.tools import skill_toolset
 from google.adk.tools.agent_tool import AgentTool
+from google.genai import types
 
 from utils import emit_event, resolve_secret
 
@@ -192,9 +193,16 @@ def build_agent() -> LlmAgent:
 
     extra_tools = [announce_a2a_to_ci, ci_agent_tool] if ci_agent_tool else [announce_a2a_to_ci]
 
+    _retry_config = types.GenerateContentConfig(
+        http_options=types.HttpOptions(
+            retry_options=types.HttpRetryOptions(initial_delay=1, attempts=5)
+        )
+    )
+
     return LlmAgent(
         name="cloud_run_remediation",
         model="gemini-2.5-flash",
+        generate_content_config=_retry_config,
         instruction=(
             "You are an SRE remediation agent for Dino Quest. "
             "You are invoked automatically when an error log is detected. "
