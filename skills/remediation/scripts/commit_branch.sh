@@ -20,6 +20,7 @@ if git ls-remote --exit-code --heads origin "$BRANCH" > /dev/null 2>&1; then
     BRANCH="${BRANCH}_$(date -u '+%M%S')"
 fi
 
+git branch -D "$BRANCH" 2>/dev/null || true
 git checkout -b "$BRANCH"    || { echo "{\"status\":\"error\",\"step\":\"checkout\"}"; exit 1; }
 git add -A                   || { echo "{\"status\":\"error\",\"step\":\"add\"}";      exit 1; }
 git commit -m "$COMMIT_MSG"  || { echo "{\"status\":\"error\",\"step\":\"commit\"}";   exit 1; }
