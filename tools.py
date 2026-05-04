@@ -13,12 +13,14 @@ def _update_with_retry(
     name: str,
     mutate: Callable[[run_v2.Service], None],
     max_retries: int = 4,
-) -> run_v2.Service:
+    wait: bool = True,
+) -> run_v2.Service | None:
     """Fetch → mutate → update_service, retrying on optimistic-lock conflicts (ABORTED).
 
-    The Cloud Run API uses etag-based optimistic locking. When two concurrent
-    callers both fetch the same version and one updates first, the other gets
-    ABORTED. We re-fetch and re-apply the mutation on each retry.
+    wait=False: submit the LRO and return immediately without blocking on rollout.
+    wait=True (default): block until the revision is ready (timeout 300s).
+    ABORTED (etag conflict) is always retried regardless of wait — it happens at
+    submission time, before the LRO starts.
     """
     client = run_v2.ServicesClient()
     service_name = name.split("/")[-1]
@@ -26,19 +28,20 @@ def _update_with_retry(
         svc = client.get_service(name=name)
         mutate(svc)
         try:
-            # timeout=300: Cloud Run LROs can queue behind concurrent updates;
-            # the default gRPC deadline (~60s) is too short in those cases.
-            result = client.update_service(service=svc).result(timeout=300)
+            op = client.update_service(service=svc)
             if attempt > 0:
-                log.info("update_service %s succeeded on attempt %d", service_name, attempt + 1)
-            return result
+                log.info("update_service %s submitted on attempt %d", service_name, attempt + 1)
+            if not wait:
+                log.info("update_service %s submitted (not waiting for rollout)", service_name)
+                return None
+            return op.result(timeout=300)
         except _api_exc.Aborted:
             if attempt == max_retries:
                 raise
-            wait = 1.5 ** attempt
+            wait_s = 1.5 ** attempt
             log.warning("update_service %s ABORTED (version conflict), retrying in %.1fs (attempt %d/%d)",
-                        service_name, wait, attempt + 1, max_retries)
-            time.sleep(wait)
+                        service_name, wait_s, attempt + 1, max_retries)
+            time.sleep(wait_s)
     raise RuntimeError("unreachable")
 
 
@@ -158,13 +161,11 @@ def update_service_resources(
             current_limits["cpu"] = cpu
         svc.template.containers[0].resources.limits = current_limits
 
-    result = _update_with_retry(name, _mutate)
-    new_limits = dict(result.template.containers[0].resources.limits)
+    _update_with_retry(name, _mutate, wait=False)
     return json.dumps({
-        "status": "updated",
+        "status": "submitted",
         "service": service_name,
-        "new_limits": new_limits,
-        "new_revision": result.latest_created_revision.split("/")[-1] if result.latest_created_revision else None,
+        "note": "memory/CPU update submitted — rollout is in progress in the background. Proceed to the code-fix track immediately.",
     })
 
 

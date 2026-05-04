@@ -20,9 +20,20 @@ if git ls-remote --exit-code --heads origin "$BRANCH" > /dev/null 2>&1; then
     BRANCH="${BRANCH}_$(date -u '+%M%S')"
 fi
 
-git checkout -b "$BRANCH"         || { echo "{\"status\":\"error\",\"step\":\"checkout\"}"; exit 1; }
-git add -A                        || { echo "{\"status\":\"error\",\"step\":\"add\"}";      exit 1; }
-git commit -m "$COMMIT_MSG"       || { echo "{\"status\":\"error\",\"step\":\"commit\"}";   exit 1; }
-git push -u origin "$BRANCH"      || { echo "{\"status\":\"error\",\"step\":\"push\"}";     exit 1; }
+git checkout -b "$BRANCH"    || { echo "{\"status\":\"error\",\"step\":\"checkout\"}"; exit 1; }
+git add -A                   || { echo "{\"status\":\"error\",\"step\":\"add\"}";      exit 1; }
+git commit -m "$COMMIT_MSG"  || { echo "{\"status\":\"error\",\"step\":\"commit\"}";   exit 1; }
+
+for attempt in 1 2 3; do
+  git push -u origin "$BRANCH" 2>/tmp/git_push_err && break
+  ERR=$(cat /tmp/git_push_err 2>/dev/null || true)
+  if [[ $attempt -lt 3 ]]; then
+    echo "git push attempt $attempt failed: $ERR — retrying in $((attempt * 4))s" >&2
+    sleep $((attempt * 4))
+  else
+    echo "{\"status\":\"error\",\"step\":\"push\",\"message\":\"push failed after 3 attempts: $ERR\"}"
+    exit 1
+  fi
+done
 
 echo "{\"status\":\"pushed\",\"branch\":\"$BRANCH\"}"

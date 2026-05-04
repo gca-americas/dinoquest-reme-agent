@@ -15,7 +15,18 @@ fi
 
 cd "$LOCAL_PATH"
 
-URL=$(gh pr create --title "$TITLE" --body "$BODY") \
-  || { echo "{\"status\":\"error\",\"message\":\"gh pr create failed\"}"; exit 1; }
+for attempt in 1 2 3; do
+  if URL=$(gh pr create --title "$TITLE" --body "$BODY" 2>/tmp/gh_pr_err); then
+    break
+  fi
+  ERR=$(cat /tmp/gh_pr_err 2>/dev/null || true)
+  if [[ $attempt -lt 3 ]]; then
+    echo "open_pr attempt $attempt failed: $ERR — retrying in $((attempt * 4))s" >&2
+    sleep $((attempt * 4))
+  else
+    echo "{\"status\":\"error\",\"message\":\"gh pr create failed after 3 attempts: $ERR\"}" >&2
+    exit 1
+  fi
+done
 
 echo "{\"status\":\"pr_created\",\"url\":\"$URL\"}"

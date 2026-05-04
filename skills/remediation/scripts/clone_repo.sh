@@ -14,12 +14,32 @@ fi
 # Inject token into HTTPS URL without exposing it in process args.
 AUTH_URL=$(echo "$REPO_URL" | sed -E "s|https://|https://x-access-token:${GITHUB_TOKEN}@|")
 
-LOCAL_PATH=$(mktemp -d /tmp/incident_fix_XXXXXX)
+CACHE_DIR="/tmp/repo_cache"
 
-if ! git clone --quiet "$AUTH_URL" "$LOCAL_PATH" 2>&1 | sed "s|${GITHUB_TOKEN}|***|g"; then
-  echo "{\"status\":\"error\",\"step\":\"clone\",\"message\":\"git clone failed\"}" >&2
-  exit 1
+# Reuse the cached clone if it exists and is for the same repo; fresh clone otherwise.
+# Shallow depth=1 keeps the clone fast regardless of repo history.
+REPO_IDENTITY="${REPO_URL#https://}"   # e.g. github.com/owner/repo — present in both plain and token-prefixed URLs
+if [[ -d "$CACHE_DIR/.git" ]] && \
+   git -C "$CACHE_DIR" remote get-url origin 2>/dev/null | grep -qF "$REPO_IDENTITY"; then
+  if ! git -C "$CACHE_DIR" fetch --depth=1 --quiet origin 2>&1 | sed "s|${GITHUB_TOKEN}|***|g"; then
+    echo "Cache fetch failed, re-cloning" >&2
+    rm -rf "$CACHE_DIR"
+  else
+    git -C "$CACHE_DIR" reset --hard origin/HEAD --quiet
+    git -C "$CACHE_DIR" clean -fd --quiet
+    git -C "$CACHE_DIR" remote set-url origin "$AUTH_URL"
+  fi
 fi
+
+if [[ ! -d "$CACHE_DIR/.git" ]]; then
+  rm -rf "$CACHE_DIR"
+  if ! git clone --depth=1 --quiet "$AUTH_URL" "$CACHE_DIR" 2>&1 | sed "s|${GITHUB_TOKEN}|***|g"; then
+    echo "{\"status\":\"error\",\"step\":\"clone\",\"message\":\"git clone failed\"}" >&2
+    exit 1
+  fi
+fi
+
+LOCAL_PATH="$CACHE_DIR"
 
 git -C "$LOCAL_PATH" config user.name  "${GIT_AUTHOR_NAME:-DinoAgent}"
 git -C "$LOCAL_PATH" config user.email "${GIT_AUTHOR_EMAIL:-dinoagent@noreply.github.com}"

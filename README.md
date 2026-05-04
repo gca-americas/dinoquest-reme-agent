@@ -337,6 +337,8 @@ gcloud run deploy remediation-agent \
   --set-env-vars="CIAGENT_URL=${CIAGENT_URL}" \
   --set-secrets="GITHUB_TOKEN=github-token:latest" \
   --no-allow-unauthenticated \
+  --min-instances=1 \
+  --no-cpu-throttling \
   --timeout=300
 ```
 
