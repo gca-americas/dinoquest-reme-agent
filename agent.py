@@ -129,7 +129,7 @@ def build_agent() -> LlmAgent:
         return _run_script("apply_fix.sh", [local_path, relative_file_path], stdin=new_content)
 
     def commit_to_incident_branch(local_path: str, incident_datetime: str, commit_message: str) -> str:
-        """Create branch incident_YYMMDDHH, stage all changes, commit, and push to origin.
+        """Create branch incident_YYMMDDHHММ, stage all changes, commit, and push to origin.
 
         incident_datetime: ISO 8601 timestamp from the error log, e.g. '2026-04-20T14:30:00Z'.
         """
@@ -187,7 +187,7 @@ def build_agent() -> LlmAgent:
         "2. Call ci_agent with EXACTLY this message format:\n"
         "   'Build and deploy branch <INCIDENT_BRANCH_NAME>'\n"
         "   where INCIDENT_BRANCH_NAME is the branch name returned by commit_to_incident_branch "
-        "(e.g. 'incident_26050202'). Do not modify or summarize — pass the exact branch name."
+        "(e.g. 'incident_2605020230'). Do not modify or summarize — pass the exact branch name."
     ) if ci_agent_tool else ""
 
     extra_tools = [announce_a2a_to_ci, ci_agent_tool] if ci_agent_tool else [announce_a2a_to_ci]

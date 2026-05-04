@@ -19,10 +19,39 @@ CACHE_DIR="/tmp/repo_cache"
 # Reuse the cached clone if it exists and is for the same repo; fresh clone otherwise.
 # Shallow depth=1 keeps the clone fast regardless of repo history.
 REPO_IDENTITY="${REPO_URL#https://}"   # e.g. github.com/owner/repo — present in both plain and token-prefixed URLs
+_git_fetch_with_retry() {
+  local attempt
+  for attempt in 1 2 3; do
+    if git -C "$CACHE_DIR" fetch --depth=1 --quiet origin 2>&1 | sed "s|${GITHUB_TOKEN}|***|g"; then
+      return 0
+    fi
+    if [[ $attempt -lt 3 ]]; then
+      echo "git fetch attempt $attempt failed — retrying in $((attempt * 5))s" >&2
+      sleep $((attempt * 5))
+    fi
+  done
+  return 1
+}
+
+_git_clone_with_retry() {
+  local attempt
+  for attempt in 1 2 3; do
+    if git clone --depth=1 --quiet "$AUTH_URL" "$CACHE_DIR" 2>&1 | sed "s|${GITHUB_TOKEN}|***|g"; then
+      return 0
+    fi
+    if [[ $attempt -lt 3 ]]; then
+      echo "git clone attempt $attempt failed — retrying in $((attempt * 5))s" >&2
+      rm -rf "$CACHE_DIR"
+      sleep $((attempt * 5))
+    fi
+  done
+  return 1
+}
+
 if [[ -d "$CACHE_DIR/.git" ]] && \
    git -C "$CACHE_DIR" remote get-url origin 2>/dev/null | grep -qF "$REPO_IDENTITY"; then
-  if ! git -C "$CACHE_DIR" fetch --depth=1 --quiet origin 2>&1 | sed "s|${GITHUB_TOKEN}|***|g"; then
-    echo "Cache fetch failed, re-cloning" >&2
+  if ! _git_fetch_with_retry; then
+    echo "Cache fetch failed after 3 attempts, re-cloning" >&2
     rm -rf "$CACHE_DIR"
   else
     git -C "$CACHE_DIR" reset --hard origin/HEAD --quiet
@@ -33,8 +62,8 @@ fi
 
 if [[ ! -d "$CACHE_DIR/.git" ]]; then
   rm -rf "$CACHE_DIR"
-  if ! git clone --depth=1 --quiet "$AUTH_URL" "$CACHE_DIR" 2>&1 | sed "s|${GITHUB_TOKEN}|***|g"; then
-    echo "{\"status\":\"error\",\"step\":\"clone\",\"message\":\"git clone failed\"}" >&2
+  if ! _git_clone_with_retry; then
+    echo "{\"status\":\"error\",\"step\":\"clone\",\"message\":\"git clone failed after 3 attempts\"}" >&2
     exit 1
   fi
 fi

@@ -75,34 +75,44 @@ finds and fixes the underlying leak or inefficiency in code.
    `backend/`, `src/`, `app/`), call `read_repo_file(local_path, "<subdir>")` to list it.
 3. Read likely culprit files with `read_repo_file` — start with the main entrypoint you discovered
    above, then any file that handles large data, caching, or unbounded collections (lists, dicts, buffers).
-3. Look for classic problematic patterns:
+4. Look for classic problematic patterns:
    - Objects accumulated in a global list/dict and never cleared
    - Large payloads loaded entirely into memory instead of streamed (based on the error)
    - Missing `close()` / context managers on file or network handles
    - Caches with no size bound or expiry
-4. If a fix can be made with confidence, apply it with `apply_code_fix`.
-5. Write a regression test with a second `apply_code_fix` call targeting
+5. If a fix can be made with confidence, apply it with `apply_code_fix`.
+6. Write a regression test with a second `apply_code_fix` call targeting
    `backend/tests/test_<issue_name>.py`. Rules for the test file:
    - **Filename must use underscores only** — e.g. `test_oom_leaderboard_fix.py`. Never use hyphens.
    - **Do NOT import the application module** (`from backend import main` etc.) — it requires
      Firebase and API keys that are not available in CI. Tests must be fully self-contained.
-   - Instead, inline the fixed logic or use `unittest.mock` to patch dependencies and test
-     the corrected behaviour in isolation.
+   - Instead, **inline the fixed logic directly in the test** and use `unittest.mock.MagicMock()`
+     for any external dependencies. **Never write custom mock classes** — MagicMock auto-creates
+     any attribute or method on access, so `mock.order_by(...)`, `mock.limit(...)` etc. all work
+     without extra setup.
+   - **CRITICAL — never modify production files (main.py, etc.) to add IS_TESTING, test_mode, or
+     any testing scaffolding.** Such changes introduce behavior divergence and are not a fix. The
+     test must simulate the fixed logic by inlining it, not by gating on a flag in the app code.
    - Assert the problematic condition no longer occurs (e.g. query result is bounded, field absent)
    - Must be runnable with `pytest backend/tests/ -v` from the repo root with no extra setup
-6. Commit both files together with `commit_to_incident_branch` (use the error event timestamp),
+7. Commit both files together with `commit_to_incident_branch` (use the error event timestamp),
    then open a PR with `open_pull_request`.
-7. If the root cause is not clear from static analysis alone, still open a PR — add logging or
+8. If the root cause is not clear from static analysis alone, still open a PR — add logging or
    memory profiling instrumentation so the next incident produces actionable data. Include a
-   placeholder test file that at minimum imports the module and asserts it loads without error.
-8. Report the PR URL and your root-cause hypothesis in the Remediation Summary.
+   placeholder test file with a simple assertion (e.g. `assert True`) and a comment explaining
+   what instrumentation was added. Do NOT import the application module in the placeholder.
+9. Report the PR URL and your root-cause hypothesis in the Remediation Summary.
+
+**If CIAgent reports test failure** — do NOT retry by creating another branch. Report the failure
+in the Remediation Summary under "Root-cause PR: closed (CI failure)" and stop. Manual intervention
+is required to diagnose and fix the test.
 
 
 **Rolling back a fix**
 
 If asked to roll back or undo a code fix, call `rollback_fix(local_path, branch_name)`.
 This closes the open PR and deletes the incident branch. The `branch_name` is the value returned
-by `commit_to_incident_branch` (e.g. `incident_26042014`). Report the rolled-back branch in
+by `commit_to_incident_branch` (e.g. `incident_2604201430`). Report the rolled-back branch in
 your summary.
 
 **Guardrails for the code fix track**
