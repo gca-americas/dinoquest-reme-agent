@@ -15,8 +15,13 @@ fi
 
 cd "$LOCAL_PATH"
 
+# For forked repos gh pr create needs --head owner:branch; derive owner from remote URL.
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+FORK_OWNER=$(git remote get-url origin | sed 's|.*github\.com/||;s|.*github\.com:||' | cut -d'/' -f1)
+HEAD_ARG="--head ${FORK_OWNER}:${BRANCH}"
+
 for attempt in 1 2 3; do
-  if URL=$(gh pr create --title "$TITLE" --body "$BODY" 2>/tmp/gh_pr_err); then
+  if URL=$(gh pr create $HEAD_ARG --title "$TITLE" --body "$BODY" 2>/tmp/gh_pr_err); then
     break
   fi
   ERR=$(cat /tmp/gh_pr_err 2>/dev/null || true)
