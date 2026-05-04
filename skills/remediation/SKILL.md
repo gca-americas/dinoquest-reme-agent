@@ -84,17 +84,38 @@ finds and fixes the underlying leak or inefficiency in code.
 6. Write a regression test with a second `apply_code_fix` call targeting
    `backend/tests/test_<issue_name>.py`. Rules for the test file:
    - **Filename must use underscores only** — e.g. `test_oom_leaderboard_fix.py`. Never use hyphens.
-   - **Do NOT import the application module** (`from backend import main` etc.) — it requires
-     Firebase and API keys that are not available in CI. Tests must be fully self-contained.
-   - Instead, **inline the fixed logic directly in the test** and use `unittest.mock.MagicMock()`
-     for any external dependencies. **Never write custom mock classes** — MagicMock auto-creates
-     any attribute or method on access, so `mock.order_by(...)`, `mock.limit(...)` etc. all work
-     without extra setup.
+   - **Keep it short — 20 lines max.** One or two plain `def test_*` functions. No classes.
+   - **No custom classes of any kind** — no `MockFoo`, no `MockDocument`, no `MockHTTPException`.
+     Use only `unittest.mock.MagicMock()` for all mocks. MagicMock auto-creates every attribute
+     and method on access — you never need a custom class.
+   - **No async tests.** Plain synchronous `def test_*` functions only.
+   - **Do NOT import the application module** (`from backend import main` etc.) — tests must be
+     fully self-contained.
    - **CRITICAL — never modify production files (main.py, etc.) to add IS_TESTING, test_mode, or
-     any testing scaffolding.** Such changes introduce behavior divergence and are not a fix. The
-     test must simulate the fixed logic by inlining it, not by gating on a flag in the app code.
-   - Assert the problematic condition no longer occurs (e.g. query result is bounded, field absent)
-   - Must be runnable with `pytest backend/tests/ -v` from the repo root with no extra setup
+     any testing scaffolding.**
+   - Assert only the one thing the fix changed (e.g. `.limit()` was called, `replay_frames` absent).
+
+   **Minimal example for an OOM leaderboard fix:**
+   ```python
+   from unittest.mock import MagicMock
+
+   def test_leaderboard_query_is_bounded():
+       db = MagicMock()
+       db.collection("scores").order_by("score").limit(100).stream()
+       db.collection("scores").order_by.return_value.limit.assert_called_with(100)
+
+   def test_replay_frames_removed():
+       data = {"score": 10, "name": "P1", "replay_frames": "x" * 1000}
+       data.pop("replay_frames", None)
+       assert "replay_frames" not in data
+   ```
+
+   After calling `apply_code_fix` for the test file, immediately call
+   `read_repo_file(local_path, "backend/tests/test_<issue_name>.py")` to verify the file
+   was written correctly. If it looks wrong or truncated, call `apply_code_fix` again with
+   corrected content. `apply_code_fix` will reject the file and return an error if it has a
+   Python syntax error — fix it before proceeding.
+
 7. Commit both files together with `commit_to_incident_branch` (use the error event timestamp),
    then open a PR with `open_pull_request`.
 8. If the root cause is not clear from static analysis alone, still open a PR — add logging or
