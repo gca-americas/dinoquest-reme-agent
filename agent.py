@@ -96,7 +96,9 @@ def build_agent() -> LlmAgent:
         return _update_service_env_vars_impl(project_id, region, service_name, env_vars)
 
     def update_service_resources(service_name: str, memory: str | None = None, cpu: str | None = None) -> str:
-        """Update memory and/or CPU limits on a Cloud Run service. memory e.g. '1Gi', '2Gi'. cpu e.g. '1', '2'.
+        """Update memory and/or CPU limits on a Cloud Run service.
+        memory: MUST use binary suffixes WITHOUT trailing B — e.g. '256Mi', '512Mi', '1Gi', '2Gi'. NEVER '256MiB' or '512MiB'.
+        cpu: e.g. '1', '2'.
         At least one of memory or cpu must be provided."""
         if not memory and not cpu:
             return json.dumps({"error": "at least one of memory or cpu must be provided"})
