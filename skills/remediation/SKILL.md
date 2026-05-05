@@ -89,25 +89,36 @@ finds and fixes the underlying leak or inefficiency in code.
      Use only `unittest.mock.MagicMock()` for all mocks. MagicMock auto-creates every attribute
      and method on access — you never need a custom class.
    - **No async tests.** Plain synchronous `def test_*` functions only.
-   - **Do NOT import the application module** (`from backend import main` etc.) — tests must be
-     fully self-contained.
+   - **CRITICAL — Do NOT import the application module** (`from main import app`, `import main`,
+     `from backend import main`, etc.). Tests must be **fully self-contained**.
+   - **CRITICAL — Do NOT use pytest fixtures** (`client`, `client_no_mock`, `mock_firebase`, etc.).
+     Do NOT add fixture names as function parameters. Do NOT call HTTP endpoints.
+     Every test must create its own mocks inline with `MagicMock()`.
    - **CRITICAL — never modify production files (main.py, etc.) to add IS_TESTING, test_mode, or
      any testing scaffolding.**
    - Assert only the one thing the fix changed (e.g. `.limit()` was called, `replay_frames` absent).
 
-   **Minimal example for an OOM leaderboard fix:**
+   **Correct pattern — fully self-contained, no fixtures, no imports of main:**
    ```python
    from unittest.mock import MagicMock
 
    def test_leaderboard_query_is_bounded():
        db = MagicMock()
-       db.collection("scores").order_by("score").limit(100).stream()
-       db.collection("scores").order_by.return_value.limit.assert_called_with(100)
+       db.collection("scores").order_by("score", direction="DESCENDING").limit(100).get()
+       db.collection.return_value.order_by.return_value.limit.assert_called_with(100)
 
    def test_replay_frames_removed():
        data = {"score": 10, "name": "P1", "replay_frames": "x" * 1000}
        data.pop("replay_frames", None)
        assert "replay_frames" not in data
+   ```
+
+   **Wrong — DO NOT do this (imports main, uses fixtures, calls HTTP):**
+   ```python
+   # WRONG: do not import the app, do not use fixtures
+   def test_leaderboard(client_no_mock, mock_firebase):  # NO fixtures
+       response = client_no_mock.get("/api/leaderboard")  # NO HTTP calls
+       assert response.status_code == 200
    ```
 
    After calling `apply_code_fix` for the test file, immediately call
