@@ -135,7 +135,11 @@ def rollback_traffic(
             )
         ]
 
-    _update_with_retry(name, _mutate)
+    try:
+        _update_with_retry(name, _mutate)
+    except Exception as e:
+        log.error("rollback_traffic failed for %s → %s: %s", service_name, revision_name, e)
+        return json.dumps({"error": str(e), "service": service_name, "revision": revision_name})
     return json.dumps({"status": "traffic_updated", "revision": revision_name, "percent": percent})
 
 
@@ -161,7 +165,11 @@ def update_service_resources(
             current_limits["cpu"] = cpu
         svc.template.containers[0].resources.limits = current_limits
 
-    _update_with_retry(name, _mutate, wait=False)
+    try:
+        _update_with_retry(name, _mutate, wait=False)
+    except Exception as e:
+        log.error("update_service_resources failed for %s: %s", service_name, e)
+        return json.dumps({"error": str(e), "service": service_name})
     return json.dumps({
         "status": "submitted",
         "service": service_name,
