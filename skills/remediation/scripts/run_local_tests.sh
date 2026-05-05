@@ -15,10 +15,8 @@ if [ ! -d "$BACKEND_DIR" ]; then
   exit 1
 fi
 
-cd "$BACKEND_DIR"
-
 echo "--- Installing test dependencies ---"
-if ! pip install -q -r requirements.txt; then
+if ! pip install -q -r "$BACKEND_DIR/requirements.txt"; then
   echo '{"status":"error","message":"pip install -r requirements.txt failed — check requirements.txt"}'
   exit 1
 fi
@@ -27,8 +25,11 @@ if ! pip install -q pytest httpx; then
   exit 1
 fi
 
+# Run pytest from repo root so that `from backend.main import app` resolves correctly.
+cd "$LOCAL_PATH"
+
 echo "--- Running pytest on $TEST_TARGET ---"
-pytest "$LOCAL_PATH/$TEST_TARGET" -v --tb=short 2>&1
+pytest "$TEST_TARGET" -v --tb=short 2>&1
 EXIT_CODE=$?
 
 if [ $EXIT_CODE -eq 0 ]; then

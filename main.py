@@ -52,7 +52,7 @@ _USER_ID = "eventarc-trigger"
 # In-memory dedup: fingerprint -> last handled datetime (fast path; Firestore is authoritative)
 _dedup_cache: dict[str, datetime] = {}
 _dedup_lock = threading.Lock()
-_DEDUP_WINDOW = timedelta(minutes=5)
+_DEDUP_WINDOW = timedelta(minutes=15)
 
 _db: _firestore.Client | None = None
 _db_lock = threading.Lock()

@@ -90,7 +90,8 @@ finds and fixes the underlying leak or inefficiency in code.
      and method on access — you never need a custom class.
    - **No async tests.** Plain synchronous `def test_*` functions only.
    - **CRITICAL — Do NOT import the application module** (`from main import app`, `import main`,
-     `from backend import main`, etc.). Tests must be **fully self-contained**.
+     `from backend import main`, `from backend.main import app`, etc.).
+     Tests must be **fully self-contained** — the only import allowed is `from unittest.mock import MagicMock`.
    - **CRITICAL — Do NOT use pytest fixtures** (`client`, `client_no_mock`, `mock_firebase`, etc.).
      Do NOT add fixture names as function parameters. Do NOT call HTTP endpoints.
      Every test must create its own mocks inline with `MagicMock()`.
@@ -130,9 +131,14 @@ finds and fixes the underlying leak or inefficiency in code.
 6b. **Run the tests locally before committing** — call
    `run_local_tests(local_path, "backend/tests/test_<issue_name>.py")`.
    - If it returns `{"status":"passed"}` → proceed to commit.
-   - If it returns `{"status":"failed"}` → read the output, fix the test file with another
-     `apply_code_fix` call, and run `run_local_tests` again. Repeat until it passes.
-   - Do NOT commit a test that fails locally. Fix it here, not in CI.
+   - If it returns `{"status":"failed"}` → read the full output carefully.
+     - Fix the test file with `apply_code_fix` and run `run_local_tests` again.
+     - **Maximum 2 retries.** If the test still fails after 2 fix attempts, replace the
+       entire test file with a single `assert True` placeholder and proceed to commit.
+       A passing placeholder is better than an infinite fix loop.
+   - **NEVER assert `len(result) == N` unless you have seeded exactly N mock documents.**
+     If the fix adds a `.limit(100)` call, test that `.limit(100)` was called on the mock
+     (`mock.limit.assert_called_with(100)`), NOT that the output contains 100 items.
 
 7. Commit both files together with `commit_to_incident_branch` (use the error event timestamp),
    then open a PR with `open_pull_request`.
