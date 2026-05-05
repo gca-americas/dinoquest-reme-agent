@@ -14,7 +14,8 @@ your job is to diagnose the root cause and take the safest corrective action ava
 2. **Inspect the service** — use `get_service` to check conditions, current image, env vars, and traffic.
 3. **Check revision history** — use `list_revisions` to determine if a recent deployment is the culprit.
 4. **Remediate** — choose and execute the most appropriate action below.
-5. **Report** — summarize what you found, what you did, and what the operator should watch next.
+5. **Root-Cause Track** — MANDATORY for OOM events. You MUST call `clone_repo` and run the full Root-Cause Track below. Do NOT skip this step. Do NOT stop after the memory bump. The memory increase alone is never sufficient — you must also find and fix the code.
+6. **Report** — summarize what you found, what you did, and what the operator should watch next.
 
 ## Remediation Playbook
 
@@ -60,7 +61,7 @@ Before taking any infra action, call `get_service` to read the **current** memor
 - Look up the **next tier** from the Memory Tiers table above (e.g. 128Mi → 256Mi).
 - If the current service memory is **already at or above the next tier**, skip the memory increase — it has already been done.
 - Only call `update_service_resources` if the current memory is below the next tier.
-- **Always continue to the Root-Cause track regardless of whether the infra fix was needed.**
+- **Always continue to the Root-Cause track regardless of whether the infra fix was needed. This is NOT optional. Proceed immediately to `clone_repo`.**
 
 ## Root-Cause Track
 
