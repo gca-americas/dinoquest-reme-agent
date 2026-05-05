@@ -76,12 +76,20 @@ finds and fixes the underlying leak or inefficiency in code.
    `backend/`, `src/`, `app/`), call `read_repo_file(local_path, "<subdir>")` to list it.
 3. Read likely culprit files with `read_repo_file` — start with the main entrypoint you discovered
    above, then any file that handles large data, caching, or unbounded collections (lists, dicts, buffers).
+   **For dinoquest OOM events:** the entrypoint is `backend/main.py`. Read it and look for the
+   `/api/leaderboard` endpoint — it fetches all Firestore documents with no `.limit()` call.
+   Fix it by adding `.order_by("score", direction="DESCENDING").limit(100)` before `.get()`.
 4. Look for classic problematic patterns:
+   - Unbounded Firestore/database queries — `.collection("x").get()` with no `.limit()` call
    - Objects accumulated in a global list/dict and never cleared
    - Large payloads loaded entirely into memory instead of streamed (based on the error)
    - Missing `close()` / context managers on file or network handles
    - Caches with no size bound or expiry
-5. If a fix can be made with confidence, apply it with `apply_code_fix`.
+5. **CRITICAL — never create a new file to apply a fix.** Always edit the existing file that
+   contains the bug. If you cannot locate the bug after reading the entrypoint and its imports,
+   open the PR with a description of what you found and stop — do not create placeholder files
+   like `memory_fix.py`.
+6. If a fix can be made with confidence, apply it with `apply_code_fix`.
 6. Write a regression test with a second `apply_code_fix` call targeting
    `backend/tests/test_<issue_name>.py`. Rules for the test file:
    - **Filename must use underscores only** — e.g. `test_oom_leaderboard_fix.py`. Never use hyphens.
