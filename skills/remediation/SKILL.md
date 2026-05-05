@@ -115,9 +115,9 @@ finds and fixes the underlying leak or inefficiency in code.
 
    **Wrong — DO NOT do this (imports main, uses fixtures, calls HTTP):**
    ```python
-   # WRONG: do not import the app, do not use fixtures
-   def test_leaderboard(client_no_mock, mock_firebase):  # NO fixtures
-       response = client_no_mock.get("/api/leaderboard")  # NO HTTP calls
+   # WRONG: uses fixtures, calls HTTP endpoint
+   def test_leaderboard(client_no_mock, mock_firebase):
+       response = client_no_mock.get("/api/leaderboard")
        assert response.status_code == 200
    ```
 
@@ -127,13 +127,36 @@ finds and fixes the underlying leak or inefficiency in code.
    corrected content. `apply_code_fix` will reject the file and return an error if it has a
    Python syntax error — fix it before proceeding.
 
+6b. **Run the tests locally before committing** — call
+   `run_local_tests(local_path, "backend/tests/test_<issue_name>.py")`.
+   - If it returns `{"status":"passed"}` → proceed to commit.
+   - If it returns `{"status":"failed"}` → read the output, fix the test file with another
+     `apply_code_fix` call, and run `run_local_tests` again. Repeat until it passes.
+   - Do NOT commit a test that fails locally. Fix it here, not in CI.
+
 7. Commit both files together with `commit_to_incident_branch` (use the error event timestamp),
    then open a PR with `open_pull_request`.
 8. If the root cause is not clear from static analysis alone, still open a PR — add logging or
    memory profiling instrumentation so the next incident produces actionable data. Include a
    placeholder test file with a simple assertion (e.g. `assert True`) and a comment explaining
    what instrumentation was added. Do NOT import the application module in the placeholder.
-9. Report the PR URL and your root-cause hypothesis in the Remediation Summary.
+9. Hand off to CIAgent. When CIAgent responds, follow the rule below — then report in the
+   Remediation Summary.
+
+**CRITICAL — one incident branch per event, no matter what CIAgent reports back:**
+
+After you open a PR and hand off to CIAgent, CIAgent will return one of:
+- **Success** → deployment is underway. Your job is done.
+- **Failure** → CI tests failed or the build failed.
+
+If CIAgent returns a failure, **do NOT clone the repo again or create another incident branch.**
+One branch per incident event is the hard limit. Doing otherwise leaves stale PRs and
+confuses reviewers.
+
+Instead, when CI fails:
+1. Note the failure in your Remediation Summary.
+2. Flag it for human review — the PR is already open and a human can fix the test or the code.
+3. Proceed directly to the Remediation Summary and stop.
 
 
 **Rolling back a fix**

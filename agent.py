@@ -146,6 +146,15 @@ def build_agent() -> LlmAgent:
                    _cid_get())
         return _run_script("open_pr.sh", [local_path, title, body])
 
+    def run_local_tests(local_path: str, test_file: str = "backend/tests/") -> str:
+        """Run pytest on the locally cloned repo to validate the fix before committing.
+        test_file: path relative to local_path (default runs all tests).
+        Returns {"status":"passed"} or {"status":"failed",...} with pytest output."""
+        emit_event("DinoAgent", "pipeline_step",
+                   {"step": "fix: running local tests"},
+                   _cid_get())
+        return _run_script("run_local_tests.sh", [local_path, test_file])
+
     def rollback_fix(local_path: str, branch_name: str) -> str:
         """Close the PR and delete the incident branch to roll back a code fix. Safe to call if already closed."""
         emit_event("DinoAgent", "pipeline_step",
@@ -231,6 +240,7 @@ def build_agent() -> LlmAgent:
             clone_repo,
             read_repo_file,
             apply_code_fix,
+            run_local_tests,
             commit_to_incident_branch,
             open_pull_request,
             rollback_fix,
