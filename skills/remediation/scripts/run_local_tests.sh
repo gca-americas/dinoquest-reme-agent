@@ -3,7 +3,7 @@
 # Usage: bash run_local_tests.sh <local_path> [test_file]
 #   local_path  Root of the cloned repo (returned by clone_repo.sh)
 #   test_file   Optional: path relative to local_path to run (default: backend/tests/)
-set -uo pipefail
+set -euo pipefail
 
 LOCAL_PATH="${1:?local_path required}"
 TEST_TARGET="${2:-backend/tests/}"

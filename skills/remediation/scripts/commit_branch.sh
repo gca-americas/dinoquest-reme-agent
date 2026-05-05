@@ -16,9 +16,10 @@ cd "$LOCAL_PATH"
 
 # Delete any local branch with this name left over from a cached clone.
 git branch -D "$BRANCH" 2>/dev/null || true
-git checkout -b "$BRANCH"    || { echo "{\"status\":\"error\",\"step\":\"checkout\"}"; exit 1; }
-git add -A                   || { echo "{\"status\":\"error\",\"step\":\"add\"}";      exit 1; }
-git commit -m "$COMMIT_MSG"  || { echo "{\"status\":\"error\",\"step\":\"commit\"}";   exit 1; }
+git checkout -b "$BRANCH"    || { echo "{\"status\":\"error\",\"step\":\"checkout\",\"message\":\"$(git status 2>&1 | head -3)\"}"; exit 1; }
+git add -A                   || { echo "{\"status\":\"error\",\"step\":\"add\",\"message\":\"git add -A failed\"}"; exit 1; }
+git commit -m "$COMMIT_MSG"  2>/tmp/git_commit_err_$$ || { ERR=$(cat /tmp/git_commit_err_$$ 2>/dev/null); rm -f /tmp/git_commit_err_$$; echo "{\"status\":\"error\",\"step\":\"commit\",\"message\":\"$ERR\"}"; exit 1; }
+rm -f /tmp/git_commit_err_$$
 
 for attempt in 1 2 3; do
   git push -u origin "$BRANCH" 2>/tmp/git_push_err && break

@@ -12,12 +12,14 @@ cat > "$TARGET"
 
 # Validate Python syntax immediately after writing.
 if [[ "$TARGET" == *.py ]]; then
-  if ! python3 -m py_compile "$TARGET" 2>/tmp/py_compile_err; then
-    ERR=$(cat /tmp/py_compile_err 2>/dev/null)
-    rm -f "$TARGET"
+  PY_ERR_FILE="/tmp/py_compile_err_$$"
+  if ! python3 -m py_compile "$TARGET" 2>"$PY_ERR_FILE"; then
+    ERR=$(cat "$PY_ERR_FILE" 2>/dev/null)
+    rm -f "$PY_ERR_FILE" "$TARGET"
     echo "{\"status\":\"error\",\"file\":\"$REL_PATH\",\"message\":\"syntax error — file rejected: $ERR\"}"
     exit 1
   fi
+  rm -f "$PY_ERR_FILE"
 fi
 
 echo "{\"status\":\"applied\",\"file\":\"$REL_PATH\"}"
