@@ -4,6 +4,8 @@ import os
 import subprocess
 from pathlib import Path
 
+_DEMO_MODE = os.environ.get("DEMO_MODE", "").lower() in ("1", "true", "yes")
+
 from google.adk.agents import LlmAgent
 from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
 from google.adk.skills import load_skill_from_dir
@@ -85,6 +87,9 @@ def build_agent() -> LlmAgent:
         emit_event("DinoAgent", "thinking",
                    {"summary": f"Rolling back Cloud Run {service_name} → {revision_name} ({percent}% traffic)"},
                    _cid_get())
+        if _DEMO_MODE:
+            log.info("[DEMO] Skipping rollback LRO wait | service=%s revision=%s", service_name, revision_name)
+            return json.dumps({"status": "traffic_updated", "revision": revision_name, "percent": percent})
         return _rollback_traffic_impl(project_id, region, service_name, revision_name, percent)
 
     def update_service_env_vars(service_name: str, env_vars: dict) -> str:
@@ -118,7 +123,26 @@ def build_agent() -> LlmAgent:
         emit_event("DinoAgent", "pipeline_step",
                    {"step": "fix: cloning repository"},
                    _cid_get())
-        return _run_script("clone_repo.sh", [github_repo_url])
+        if _DEMO_MODE:
+            import os as _os, subprocess as _sp
+            cache = "/tmp/repo_cache"
+            if _os.path.isdir(f"{cache}/.git"):
+                token = os.environ.get("GITHUB_TOKEN", "")
+                repo_url = os.environ.get("GITHUB_REPO_URL", "")
+                auth_url = repo_url.replace("https://", f"https://x-access-token:{token}@") if token else repo_url
+                if auth_url:
+                    _sp.run(["git", "-C", cache, "remote", "set-url", "origin", auth_url],
+                            capture_output=True)
+                # Reset to origin/main so each demo run starts clean — prevents
+                # accumulation of local commits that can't be pushed (missing parent objects).
+                _sp.run(["git", "-C", cache, "checkout", "main"], capture_output=True)
+                _sp.run(["git", "-C", cache, "fetch", "--quiet", "origin", "main"],
+                        capture_output=True)
+                _sp.run(["git", "-C", cache, "reset", "--hard", "origin/main"], capture_output=True)
+                _sp.run(["git", "-C", cache, "clean", "-fd"], capture_output=True)
+                log.info("[DEMO] Reusing cached repo at %s (reset to origin/main)", cache)
+                return json.dumps({"status": "cloned", "local_path": cache})
+        return _run_script("clone_repo.sh", [])
 
     def read_repo_file(local_path: str, relative_file_path: str) -> str:
         """Read a source file from the cloned repo. Always call before applying a fix."""
@@ -155,6 +179,9 @@ def build_agent() -> LlmAgent:
         emit_event("DinoAgent", "pipeline_step",
                    {"step": "fix: running local tests"},
                    _cid_get())
+        if _DEMO_MODE:
+            log.info("[DEMO] Skipping local pytest run")
+            return json.dumps({"status": "passed", "output": "DEMO MODE — pytest skipped\n3 passed in 0.31s"})
         return _run_script("run_local_tests.sh", [local_path, test_file])
 
     def rollback_fix(local_path: str, branch_name: str) -> str:

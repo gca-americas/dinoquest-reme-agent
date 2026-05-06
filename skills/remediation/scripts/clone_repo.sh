@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
-# Usage: clone_repo.sh <repo_url>
-# GITHUB_TOKEN must be set in the environment.
-# Prints the local path on success, or an error message on failure.
+# Clones or updates the repo from GITHUB_REPO_URL env var.
+# GITHUB_TOKEN must also be set in the environment.
 set -euo pipefail
 
-REPO_URL="${1:?repo_url required}"
+REPO_URL="${GITHUB_REPO_URL:?GITHUB_REPO_URL is not set}"
 
 if [[ -z "${GITHUB_TOKEN:-}" ]]; then
   echo '{"status":"error","message":"GITHUB_TOKEN is not set"}' >&2
@@ -18,7 +17,7 @@ CACHE_DIR="/tmp/repo_cache"
 
 # Reuse the cached clone if it exists and is for the same repo; fresh clone otherwise.
 # Shallow depth=1 keeps the clone fast regardless of repo history.
-REPO_IDENTITY="${REPO_URL#https://}"   # e.g. github.com/owner/repo — present in both plain and token-prefixed URLs
+REPO_IDENTITY="${REPO_URL#https://}"   # e.g. github.com/owner/repo
 _git_fetch_with_retry() {
   local attempt
   for attempt in 1 2 3; do
@@ -49,7 +48,7 @@ _git_clone_with_retry() {
 }
 
 if [[ -d "$CACHE_DIR/.git" ]] && \
-   git -C "$CACHE_DIR" remote get-url origin 2>/dev/null | grep -qF "$REPO_IDENTITY"; then
+   git -C "$CACHE_DIR" remote get-url origin 2>/dev/null | grep -qE "$(echo "$REPO_IDENTITY" | sed 's|[.[\*^${}()+?|\\]|\\&|g')(\.git)?$"; then
   if ! _git_fetch_with_retry; then
     echo "Cache fetch failed after 3 attempts, re-cloning" >&2
     rm -rf "$CACHE_DIR"
