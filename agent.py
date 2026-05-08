@@ -239,7 +239,7 @@ def build_agent() -> LlmAgent:
 
     return LlmAgent(
         name="cloud_run_remediation",
-        model="gemini-2.5-flash",
+        model="gemini-3-flash-preview",
         generate_content_config=_retry_config,
         instruction=(
             "You are an SRE remediation agent for Dino Quest. "
